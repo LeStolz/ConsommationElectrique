@@ -1,5 +1,46 @@
 # ElectricityConsumption
 
+Projet de prévision de la consommation électrique horaire en France métropolitaine. À 14h le jour J, l'objectif est de prévoir les 24 valeurs horaires de consommation du jour J+1, en respectant strictement l'information réellement disponible à cet instant (pas de fuite de données du futur). Le projet couvre la préparation des données, la construction de modèles de référence et de modèles plus élaborés, un protocole de validation temporelle rigoureux, et un audit critique de la chaîne de prévision complète.
+
+## Données
+
+### État d'avancement
+
+Trois sources ont été collectées, nettoyées puis fusionnées en un seul jeu de données horaire, aligné en UTC, couvrant 2019-01-01 à 2025-12-31 (61 368 lignes).
+
+**1. Consommation électrique (RTE / éCO2mix)**
+- Source : `eco2mix-national-cons-def`, extraite via l'API open data de RTE.
+- Conversion explicite en UTC (`utc=True`), avec une colonne `timestamp_paris` conservée en plus de `timestamp_utc` pour la traçabilité.
+- 7 valeurs manquantes interpolées (trous courts).
+- Variable `covid19` (booléen) ajoutée pour isoler la période de forte perturbation (17/03/2020 au 30/06/2021), à la place de l'ancienne colonne `corona`.
+- Script : `src/pre_processing/conso_data_preprocessing.py`
+
+**2. Météo (SYNOP, Météo-France)**
+- 9 stations retenues pour une couverture représentative du territoire (nord/sud/est/ouest/centre) : Strasbourg, Lyon, Lille, Orly (Paris), Marignane (Marseille), Bordeaux, Nantes, Rennes, Toulouse.
+- Variables conservées : température, point de rosée, humidité, vent, nébulosité, précipitations.
+- Observations (toutes les 3h) ramenées à l'heure par interpolation linéaire (trous ≤ 3h), puis moyennées entre les 9 stations pour obtenir une série météo nationale.
+- Anomalie détectée et corrigée : artefacts d'interpolation produisant de très légères précipitations négatives (9 554 valeurs, de l'ordre de -0,01 à -0,08 mm) → tronquées à 0.
+- Script : `src/pre_processing/meteo_data_preprocesing.py`
+
+**3. Variables calendaires**
+- Heure, jour de la semaine, mois, week-end : dérivés directement du timestamp (aucune source externe nécessaire).
+- Jours fériés : calculés avec la bibliothèque `holidays` (pas de téléchargement nécessaire).
+- Vacances scolaires : fichier téléchargé depuis `data.education.gouv.fr` (dataset `fr-en-calendrier-scolaire`), zones A/B/C combinées (vacances = au moins une zone en congé).
+- Grille horaire construite en UTC puis convertie en heure de Paris pour les variables calendaires (un bug d'alignement d'1h, dû à une construction initiale en heure de Paris, a été détecté et corrigé avant la fusion).
+- Script : `src/pre_processing/calendrier_data_preprocessing.py`
+
+**Fusion**
+- Jointure `left` sur `timestamp_utc`, avec la table de consommation comme référence (aucune heure de conso observée n'est perdue).
+- 57 heures avec météo manquante après fusion (0,09 %), documentées plutôt que comblées silencieusement.
+- Script : `src/pre_processing/fusion_datasets.py`
+- Sortie : `data/processed/dataset_final.csv`
+
+### Décisions à trancher avant la modélisation
+
+- **Période Covid** : la variable `covid19` est disponible, mais la décision de l'exclure ou non de l'entraînement n'est pas encore prise — à documenter dans le protocole de validation.
+- **Valeurs manquantes résiduelles** (57 lignes côté météo) : à traiter (interpolation ou exclusion) avant de construire les variables de prévision.
+- **Retards de consommation et distinction scénario opérationnel / météo parfaite** : pas encore construits — relèvent de l'étape de modélisation, pas de la préparation des données.
+
 ## Contexte
 
 Construire, évaluer et discuter une chaîne complète de prévision de la consommation d’électricité en France métropolitaine.
