@@ -4,11 +4,9 @@ Construction des variables calendaires.
 Ce script construit, pour chaque heure de la période étudiée :
 - l'heure, le jour de la semaine, le mois (en heure de Paris, car ce sont
   des notions de calendrier civil, pas des instants UTC) ;
-- le week-end (samedi/dimanche) ;
-- les jours fériés (calculés directement, pas besoin de téléchargement) ;
-- les vacances scolaires (lues depuis un fichier téléchargé une fois à la
-  main, comme pour les données SYNOP : reproductible, pas d'appel réseau
-  caché dans le pipeline).
+- le week-end
+- les jours fériés 
+- les vacances scolaires 
 
 """
 
