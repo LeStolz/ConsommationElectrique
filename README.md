@@ -1,6 +1,15 @@
 # ElectricityConsumption
 
-Projet de prévision de la consommation électrique horaire en France métropolitaine. À 14h le jour J, l'objectif est de prévoir les 24 valeurs horaires de consommation du jour J+1, en respectant strictement l'information réellement disponible à cet instant (pas de fuite de données du futur). Le projet couvre la préparation des données, la construction de modèles de référence et de modèles plus élaborés, un protocole de validation temporelle rigoureux, et un audit critique de la chaîne de prévision complète.
+À 14h le jour J, prévoir la consommation d’électricité en France métropolitaine horaire de l’ensemble de la journée J + 1:
+$$
+\hat{C}_{J+1,h}\ \forall\ h \in \{ 0...23 \}
+$$
+
+Le protocole opérationnel doit respecter strictement l’information qui serait réellement disponible à 14 h le jour J.
+
+Un protocole parfait qui utilise a posteriori les infos (météo,...) observées pendant J+1 uniquement comme comparaison ou borne de performance.
+
+Le projet couvre la préparation des données, la construction de modèles de référence et de modèles plus élaborés, un protocole de validation temporelle rigoureux, et un audit critique de la chaîne de prévision complète.
 
 ## Données
 
@@ -14,6 +23,11 @@ Trois sources ont été collectées, nettoyées puis fusionnées en un seul jeu 
 - 7 valeurs manquantes interpolées (trous courts).
 - Variable `covid19` (booléen) ajoutée pour isoler la période de forte perturbation (17/03/2020 au 30/06/2021), à la place de l'ancienne colonne `corona`.
 - Script : `src/pre_processing/conso_data_preprocessing.py`
+- Justifier pourquoi ne pas utiliser les autres données dispo de la site :
+	- Variables génération are too correlated (e.x if nuclear production drop, some other means might increase) and generation follows demand (e.x. less consommation -> less generation) so using generation is same as consommation.
+	- generation depends on weather (solar, wind,...) but we already have weather data which may cover this.
+	- Échange is similar to generation.
+	- Prix marché is similar in that it is determined by the demand (consommation) AND supply but there is little instant in which supply determines consommation, however, it also introduces noise (e.x if there is an outage, supply spike, but price usually doesn't change immediately). BUT it might reveal info about the covid19.
 
 **2. Météo (SYNOP, Météo-France)**
 - 9 stations retenues pour une couverture représentative du territoire (nord/sud/est/ouest/centre) : Strasbourg, Lyon, Lille, Orly (Paris), Marignane (Marseille), Bordeaux, Nantes, Rennes, Toulouse.
@@ -37,22 +51,17 @@ Trois sources ont été collectées, nettoyées puis fusionnées en un seul jeu 
 
 ### Décisions à trancher avant la modélisation
 
-- **Période Covid** : la variable `covid19` est disponible, mais la décision de l'exclure ou non de l'entraînement n'est pas encore prise — à documenter dans le protocole de validation.
+- **Période Covid** : la variable `covid19` est disponible, mais la décision de l'exclure ou non de l'entraînement n'est pas encore prise — à documenter dans le protocole de validation on peut utiliser:
+	1.  2022-2026
+	2.  2019-2026 avec un feature pour covid
+	3.  2019-2026 sans covid feature
+	4.  2016-2026 avec covid feature
+	5.  2016-2026 sans covid feature
+	6.  2016-2026 avec covid enlevé
+
+
 - **Valeurs manquantes résiduelles** (57 lignes côté météo) : à traiter (interpolation ou exclusion) avant de construire les variables de prévision.
 - **Retards de consommation et distinction scénario opérationnel / météo parfaite** : pas encore construits — relèvent de l'étape de modélisation, pas de la préparation des données.
-
-## Contexte
-
-Construire, évaluer et discuter une chaîne complète de prévision de la consommation d’électricité en France métropolitaine.
-
-À 14h le jour J, prévoir la consommation électrique horaire de l’ensemble de la journée J + 1:
-$$
-\hat{C}_{J+1,h}\ \forall\ h \in \{ 0...23 \}
-$$
-
-Le protocole opérationnel doit respecter strictement l’information qui serait réellement disponible à 14 h le jour J.
-
-Un protocole parfait qui utilise a posteriori les infos (météo,...) observées pendant J+1 uniquement comme comparaison ou borne de performance.
 
 ## À faire
 
@@ -111,6 +120,7 @@ Il faut expliquer/documenter/interpreter tous dans le rapport (< 10 pages):
 - choix méthodologiques,
 - le protocole d’évaluation,
 - les résultats essentiels et l’analyse critique.
+- Discussion
 - La page de titre, la bibliographie et des annexes techniques raisonnables ne sont pas comptabilisées.
 - Les longues portions de code et les sorties non commentées n’ont pas leur place dans le corps du rapport.
 
