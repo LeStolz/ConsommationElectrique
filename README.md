@@ -26,7 +26,7 @@ Trois sources ont été collectées, nettoyées puis fusionnées en un seul jeu 
 - Variable `covid19` (booléen) ajoutée pour isoler la période de forte perturbation (17/03/2020 au 30/06/2021, 11 280 heures concernées).
 - Script : `src/pre_processing/conso_data_preprocessing.py`
 
-> Remplace une première extraction par API (faite par un autre membre du groupe, jugée peu fiable) : l'extraction se fait maintenant exactement comme pour la météo et le calendrier (téléchargement manuel + script de lecture seule).
+
 
 **2. Météo (SYNOP, Météo-France)**
 - Source : exports annuels Météo-France, un fichier par an (`synop_AAAA.csv.gz`), téléchargés à la main sur :
