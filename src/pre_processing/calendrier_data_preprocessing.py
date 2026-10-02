@@ -28,9 +28,8 @@ PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
 FICHIER_VACANCES_BRUT = RAW_DIR / "fr-en-calendrier-scolaire.csv"
  
-
-DATE_DEBUT = "2019-01-01"
-DATE_FIN = "2026-01-01" 
+DATE_DEBUT = "2016-01-01"
+DATE_FIN = "2026-10-01"  
 ZONES = ["Zone A", "Zone B", "Zone C"]
 
 ALIAS_COLONNES = {
@@ -45,7 +44,7 @@ ALIAS_COLONNES = {
  
 def construire_jours_feries():
     print("Calcul des jours fériés...")
-    annees = range(2019, 2027)
+    annees = range(2016, 2027)
     fr = holidays.France(years=list(annees))
     df = pd.DataFrame(
         [(pd.Timestamp(d), nom) for d, nom in fr.items()],

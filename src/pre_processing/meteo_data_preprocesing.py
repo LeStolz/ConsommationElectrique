@@ -26,7 +26,7 @@ RAW_DIR = BASE_DIR / "data" / "raw" / "synop_meteo"
 PROCESSED_DIR = BASE_DIR / "data" / "processed"
 PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
-ANNEES = range(2019, 2026)  
+ANNEES = range(2016, 2027)
  
 # Stations retenues : couverture nord/sud/est/ouest/centre + grandes métropoles
 STATIONS = {
