@@ -6,39 +6,58 @@ Projet de prévision de la consommation électrique horaire en France métropoli
 
 ### État d'avancement
 
-Trois sources ont été collectées, nettoyées puis fusionnées en un seul jeu de données horaire, aligné en UTC, couvrant 2019-01-01 à 2025-12-31 (61 368 lignes).
+Trois sources ont été collectées, nettoyées puis fusionnées en un seul jeu de données horaire, aligné en UTC, couvrant **2016-01-01 à 2026-09-30** (94 224 lignes).
+
+> Toutes les données sont téléchargées **à la main** depuis les portails sources et déposées dans `data/raw/`, puis uniquement lues (jamais récupérées) par les scripts de `src/pre_processing/` : aucun appel réseau caché dans le pipeline, tout est reproductible à partir de fichiers versionnés.
 
 **1. Consommation électrique (RTE / éCO2mix)**
-- Source : `eco2mix-national-cons-def`, extraite via l'API open data de RTE.
+- Deux fichiers nécessaires, téléchargés à la main sur le portail ODRE (OpenDataSoft), car aucun des deux seuls ne couvre 2016 → septembre 2026 :
+  - **Données consolidées et définitives** (source principale, la plus fiable, mais s'arrête fin juin 2026) :
+    https://odre.opendatasoft.com/explore/dataset/eco2mix-national-cons-def/export/
+    → `data/raw/rte_consommation/eco2mix_national_cons_def.csv`
+  - **Données temps réel** (utilisées uniquement pour combler juillet → septembre 2026, absent du fichier définitif ; données encore révisables, donc moins fiables) :
+    https://odre.opendatasoft.com/explore/dataset/eco2mix-national-tr/export/
+    → `data/raw/rte_consommation/eco2mix_national_tr.csv`
+- Les deux fichiers sont au pas de 15 minutes (`Date et Heure`, avec décalage horaire explicite `+01:00`/`+02:00`) et agrégés à l'heure par moyenne.
+- Combinaison : données "définitives" prioritaires ; "temps réel" utilisé seulement pour les heures absentes du fichier définitif (aucun recouvrement écrasé).
+- Colonne `source_donnee` conservée (Données définitives / consolidées / temps réel / interpolé) pour l'audit de fiabilité : toutes les heures n'ont pas le même niveau de consolidation.
 - Conversion explicite en UTC (`utc=True`), avec une colonne `timestamp_paris` conservée en plus de `timestamp_utc` pour la traçabilité.
-- 7 valeurs manquantes interpolées (trous courts).
-- Variable `covid19` (booléen) ajoutée pour isoler la période de forte perturbation (17/03/2020 au 30/06/2021), à la place de l'ancienne colonne `corona`.
+- 10 valeurs manquantes résiduelles interpolées (trous courts) ; 0 valeur manquante restante.
+- Variable `covid19` (booléen) ajoutée pour isoler la période de forte perturbation (17/03/2020 au 30/06/2021, 11 280 heures concernées).
 - Script : `src/pre_processing/conso_data_preprocessing.py`
 
+> Remplace une première extraction par API (faite par un autre membre du groupe, jugée peu fiable) : l'extraction se fait maintenant exactement comme pour la météo et le calendrier (téléchargement manuel + script de lecture seule).
+
 **2. Météo (SYNOP, Météo-France)**
+- Source : exports annuels Météo-France, un fichier par an (`synop_AAAA.csv.gz`), téléchargés à la main sur :
+  `https://meteofrance.s3.sbg.io.cloud.ovh.net/data/OBS/SYNOP/synop_AAAA.csv.gz` (ex. `synop_2016.csv.gz` … `synop_2026.csv.gz`)
+  → dézippés et déposés dans `data/raw/synop_meteo/`.
 - 9 stations retenues pour une couverture représentative du territoire (nord/sud/est/ouest/centre) : Strasbourg, Lyon, Lille, Orly (Paris), Marignane (Marseille), Bordeaux, Nantes, Rennes, Toulouse.
 - Variables conservées : température, point de rosée, humidité, vent, nébulosité, précipitations.
 - Observations (toutes les 3h) ramenées à l'heure par interpolation linéaire (trous ≤ 3h), puis moyennées entre les 9 stations pour obtenir une série météo nationale.
-- Anomalie détectée et corrigée : artefacts d'interpolation produisant de très légères précipitations négatives (9 554 valeurs, de l'ordre de -0,01 à -0,08 mm) → tronquées à 0.
-- Script : `src/pre_processing/meteo_data_preprocesing.py`
+- Anomalie détectée et corrigée : artefacts d'interpolation produisant de très légères précipitations négatives (14 661 valeurs sur la période étendue) → tronquées à 0.
+- Valeurs manquantes résiduelles (trous > 3h, non interpolés) : 107 heures pour température/point de rosée/humidité/vent, 598 pour la nébulosité, 167 pour les précipitations — proportions faibles (< 0,7 %).
+- Script : `src/pre_processing/meteo_data_preprocessing.py`
 
 **3. Variables calendaires**
 - Heure, jour de la semaine, mois, week-end : dérivés directement du timestamp (aucune source externe nécessaire).
-- Jours fériés : calculés avec la bibliothèque `holidays` (pas de téléchargement nécessaire).
-- Vacances scolaires : fichier téléchargé depuis `data.education.gouv.fr` (dataset `fr-en-calendrier-scolaire`), zones A/B/C combinées (vacances = au moins une zone en congé).
+- Jours fériés : calculés avec la bibliothèque `holidays` (pas de téléchargement nécessaire), 121 jours sur 2016-2026.
+- Vacances scolaires : fichier téléchargé depuis `data.education.gouv.fr` (dataset `fr-en-calendrier-scolaire`), zones A/B/C combinées (vacances = au moins une zone en congé) ; 1 372 jours en vacances sur 3 927.
 - Grille horaire construite en UTC puis convertie en heure de Paris pour les variables calendaires (un bug d'alignement d'1h, dû à une construction initiale en heure de Paris, a été détecté et corrigé avant la fusion).
 - Script : `src/pre_processing/calendrier_data_preprocessing.py`
 
 **Fusion**
 - Jointure `left` sur `timestamp_utc`, avec la table de consommation comme référence (aucune heure de conso observée n'est perdue).
-- 57 heures avec météo manquante après fusion (0,09 %), documentées plutôt que comblées silencieusement.
+- 107 heures avec météo manquante après fusion (0,11 %), documentées plutôt que comblées silencieusement (deux trous identifiés, notamment fin août 2017 et mi-avril 2026).
+- 0 doublon de `timestamp_utc`.
 - Script : `src/pre_processing/fusion_datasets.py`
-- Sortie : `data/processed/dataset_final.csv`
+- Sortie : `data/processed/dataset_final.csv` (94 224 lignes × 21 colonnes)
 
 ### Décisions à trancher avant la modélisation
 
 - **Période Covid** : la variable `covid19` est disponible, mais la décision de l'exclure ou non de l'entraînement n'est pas encore prise — à documenter dans le protocole de validation.
-- **Valeurs manquantes résiduelles** (57 lignes côté météo) : à traiter (interpolation ou exclusion) avant de construire les variables de prévision.
+- **Fiabilité variable de la consommation récente** : les heures de juillet-septembre 2026 reposent sur des données "temps réel" encore révisables (`source_donnee` = "Données temps réel"), contrairement au reste de la série (consolidé/définitif) — point à traiter explicitement dans l'audit critique (disponibilité de l'information).
+- **Valeurs manquantes résiduelles côté météo** (107 à 598 heures selon la variable) : à traiter (interpolation ou exclusion) avant de construire les variables de prévision.
 - **Retards de consommation et distinction scénario opérationnel / météo parfaite** : pas encore construits — relèvent de l'étape de modélisation, pas de la préparation des données.
 
 ## Contexte
