@@ -29,21 +29,13 @@ PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 FICHIER_VACANCES_BRUT = RAW_DIR / "fr-en-calendrier-scolaire.csv"
  
 
-DATE_DEBUT = "2016-01-01"
-DATE_FIN = "2026-10-01"  # borne exclue -> dernière heure incluse : 30/09/2026 23h
+FICHIER_VACANCES_COMPLEMENT = RAW_DIR / "vacances_scolaires_2016_2017_complement.csv"
  
-# Zone académique à utiliser pour les vacances scolaires.
-# La conso est nationale, mais les vacances sont zonées (A/B/C) et décalées
-# dans le temps. Choix simple et documenté : on considère qu'on est "en
-# vacances" si AU MOINS UNE des 3 zones l'est (hypothèse simplificatrice,
-# à mentionner dans le rapport). Une version plus fine pourrait compter
-# la fraction de zones en vacances (0, 1/3, 2/3, 1) plutôt qu'un booléen.
+DATE_DEBUT = "2016-01-01"
+DATE_FIN = "2026-10-01" 
+ 
 ZONES = ["Zone A", "Zone B", "Zone C"]
  
-# Noms de colonnes possibles dans le fichier exporté (le format exact
-# dépend de l'option use_labels de l'export : libellés français ou noms
-# techniques). Le script essaie plusieurs variantes et signale clairement
-# si aucune ne correspond.
 ALIAS_COLONNES = {
     "date_debut": ["Date de début", "start_date", "Date début"],
     "date_fin": ["Date de fin", "end_date", "Date fin"],
@@ -51,10 +43,6 @@ ALIAS_COLONNES = {
     "population": ["Population", "population"],
 }
  
- 
-# ============================================================
-# JOURS FÉRIÉS (calcul direct, pas de téléchargement)
-# ============================================================
  
 def construire_jours_feries():
     print("Calcul des jours fériés...")
@@ -67,10 +55,7 @@ def construire_jours_feries():
     print(f"  → {len(df)} jours fériés calculés")
     return df
  
- 
-# ============================================================
-# VACANCES SCOLAIRES (lecture du fichier téléchargé à la main)
-# ============================================================
+
  
 def _trouver_colonne(df, candidats, nom_logique):
     for c in candidats:
@@ -95,24 +80,27 @@ def lire_vacances_scolaires_brut():
             f"et place-le dans {RAW_DIR}/"
         )
  
-    # Les exports OpenDataSoft (comme pour SYNOP) utilisent ';' comme séparateur
     df = pd.read_csv(FICHIER_VACANCES_BRUT, sep=";")
  
     print(f"  → {len(df)} lignes lues, colonnes : {df.columns.tolist()}")
+ 
+    if FICHIER_VACANCES_COMPLEMENT.exists():
+        print(f"\nLecture du complément 2016-2017 (trou du dataset officiel)...")
+        df_complement = pd.read_csv(FICHIER_VACANCES_COMPLEMENT, sep=";")
+        print(f"  → {len(df_complement)} lignes ajoutées (source : arrêté du "
+              f"21 janvier 2014, Légifrance)")
+        df = pd.concat([df, df_complement], ignore_index=True)
+    else:
+        print(f"\nATTENTION : {FICHIER_VACANCES_COMPLEMENT.name} introuvable "
+              f"-> le trou Zone A/B/C de janvier 2016 à août 2017 ne sera "
+              f"PAS comblé (vacances=0 sur cette période, même si en vrai "
+              f"il y a des vacances).")
  
     return df
  
  
 def construire_calendrier_vacances(df_vacances):
-    """
-    Transforme la table brute (une ligne = une période de vacances pour
-    une zone) en une série journalière : vacances = nombre de zones (0 à 3)
-    en vacances à cette date, plutôt qu'un simple booléen. Plus informatif
-    qu'un "au moins une zone" : un jour où les 3 zones sont en vacances
-    (ex. Noël) n'a pas le même effet sur la conso nationale qu'un jour où
-    une seule zone l'est (ex. vacances d'hiver décalées par zone).
-    """
- 
+  
     print("\nConstruction du calendrier journalier des vacances...")
  
     col_debut = _trouver_colonne(df_vacances, ALIAS_COLONNES["date_debut"], "date_debut")
@@ -121,10 +109,7 @@ def construire_calendrier_vacances(df_vacances):
     col_population = _trouver_colonne(df_vacances, ALIAS_COLONNES["population"], "population")
  
     df = df_vacances.copy()
-    # Le fichier distingue parfois Élèves / Enseignants, mais pour les vacances
-    # communes à tous (Noël, Toussaint, Hiver, Printemps), la colonne Population
-    # vaut "-" (pas de distinction). On garde donc "-" ET tout ce qui contient
-    # "lève", et on exclut explicitement les lignes réservées aux enseignants.
+
     masque_population = (
         df[col_population].astype(str).str.strip().eq("-")
         | df[col_population].astype(str).str.contains("lève", case=False, na=False)
@@ -132,14 +117,13 @@ def construire_calendrier_vacances(df_vacances):
     df = df[masque_population]
     df = df[df[col_zones].isin(ZONES)]
  
-    df[col_debut] = pd.to_datetime(df[col_debut], errors="coerce", utc=True).dt.tz_localize(None)
-    df[col_fin] = pd.to_datetime(df[col_fin], errors="coerce", utc=True).dt.tz_localize(None)
+    df[col_debut] = pd.to_datetime(df[col_debut], errors="coerce", utc=True, format="mixed").dt.tz_localize(None)
+    df[col_fin] = pd.to_datetime(df[col_fin], errors="coerce", utc=True, format="mixed").dt.tz_localize(None)
     df = df.dropna(subset=[col_debut, col_fin])
  
     jours = pd.date_range(DATE_DEBUT, DATE_FIN, freq="D")
  
-    # Un compteur par zone, puis on les additionne -> nombre de zones (0-3)
-    # en vacances ce jour-là, au lieu d'un simple booléen.
+   
     nb_zones_vacances = pd.Series(0, index=jours)
  
     for zone in ZONES:
@@ -156,20 +140,9 @@ def construire_calendrier_vacances(df_vacances):
     return resultat
  
  
-# ============================================================
-# TABLE HORAIRE COMPLÈTE
-# ============================================================
  
 def construire_table_horaire(df_feries, df_vacances):
- 
-    print("\nConstruction de la table horaire complète...")
- 
-    # Grille horaire construite en UTC (comme les tables conso et météo),
-    # pour garantir le même alignement. On en déduit ensuite l'heure de
-    # Paris correspondante pour chaque ligne, plutôt que de construire la
-    # grille directement en heure de Paris (ça décalait tout d'une heure
-    # par rapport aux autres tables : bug détecté par vérification croisée
-    # avant la fusion, corrigé ici).
+  
     index_utc = pd.date_range(
         DATE_DEBUT, DATE_FIN, freq="1h", tz="UTC", inclusive="left"
     )
@@ -178,7 +151,7 @@ def construire_table_horaire(df_feries, df_vacances):
     df["timestamp_paris"] = df["timestamp_utc"].dt.tz_convert("Europe/Paris")
  
     df["heure"] = df["timestamp_paris"].dt.hour
-    df["jour_semaine"] = df["timestamp_paris"].dt.dayofweek  # 0=lundi ... 6=dimanche
+    df["jour_semaine"] = df["timestamp_paris"].dt.dayofweek 
     df["mois"] = df["timestamp_paris"].dt.month
     df["weekend"] = df["jour_semaine"].isin([5, 6])
  
@@ -188,12 +161,8 @@ def construire_table_horaire(df_feries, df_vacances):
     df["ferie"] = df["nom_ferie"].notna()
  
     df = df.merge(df_vacances, on="date", how="left")
-    # vacances : nombre de zones (0-3) en vacances ce jour-là (int, pas bool).
     df["vacances"] = df["vacances"].fillna(0).astype(int)
  
-    # On garde timestamp_paris (en plus de timestamp_utc) pour la traçabilité :
-    # ça permet de vérifier directement un jour férié ou une heure de pointe
-    # sans avoir à reconvertir depuis l'UTC à chaque fois.
     df = df.drop(columns=["date"])
     df = df[["timestamp_utc", "timestamp_paris", "heure", "jour_semaine", "mois",
               "weekend", "nom_ferie", "ferie", "vacances"]]
@@ -201,9 +170,6 @@ def construire_table_horaire(df_feries, df_vacances):
     return df
  
  
-# ============================================================
-# PROGRAMME PRINCIPAL
-# ============================================================
  
 if __name__ == "__main__":
  
