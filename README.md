@@ -1,6 +1,6 @@
 # ElectricityConsumption
 
-À 14h le jour J, prévoir la consommation d’électricité en France métropolitaine horaire de l’ensemble de la journée J + 1:
+À 14h le jour J, prévoir la **average** consommation d’électricité en France métropolitaine horaire de l’ensemble de la journée J + 1:
 $$
 \hat{C}_{J+1,h}\ \forall\ h \in \{ 0...23 \}
 $$
@@ -39,7 +39,9 @@ Trois sources ont été collectées, nettoyées puis fusionnées en un seul jeu 
 	- generation depends on weather (solar, wind,...) but we already have weather data which may cover this.
 	- Échange is similar to generation.
 	- Prix marché is similar in that it is determined by the demand (consommation) AND supply but there is little instant in which supply determines consommation, however, it also introduces noise (e.x if there is an outage, supply spike, but price usually doesn't change immediately). BUT it might reveal info about the covid19.
-
+- Justifier l'utilisation des données consolidées, temps réels, définitifs.
+- When covid?
+- données ND (non dispo).
 
 
 **2. Météo (SYNOP, Météo-France)**
@@ -105,6 +107,13 @@ Les données seront ramenées à une granularité horaire.
 	- $\hat{C}_{J+1,h} = C_{J-6/7,h}$
 	- Moyenne de plusieurs jours comparables
 	- Modèle linéaire simple fondé sur le calendrier et quelques retards.
+
+Météo comment ?
+	- Météo prévisé pour J+1
+	- Météo J (mais après 14h comment ?)
+	- Météo J-1
+
+
 5. Modèles (chaque méthode doit répondre à une hypothèse ou à une limite
 identifiée) :
 	- Des modèles de séries temporelles
