@@ -197,6 +197,8 @@ identifiée) :
 	- Des méthodes avec covariables externes (météorologiques, calendaires,...)
 	- Des méthodes d’apprentissage automatique.
 	- Peut-être autres modèles avec meilleur test validation.
+	- Prophet
+	- ATTENTION LE METEO est interpole, alors, attention au fuit de données
 
 	Les 24 heures peuvent être prévues séparément ou conjointement.
 

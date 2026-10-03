@@ -91,7 +91,7 @@ def lire_fichier_brut(chemin, nom_source):
 
     print(f"Lecture du fichier brut {nom_source} ({chemin.name})...")
 
-    df = pd.read_csv(chemin, sep=";")
+    df = pd.read_csv(chemin, sep=";", encoding="utf-8")
     print(f"  → {len(df)} lignes lues")
 
     col_timestamp = _trouver_colonne(df, ALIAS_COLONNES["timestamp"], "timestamp")
