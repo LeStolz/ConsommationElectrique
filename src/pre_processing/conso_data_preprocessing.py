@@ -14,17 +14,6 @@ Deux fichiers bruts sont nécessaires, car aucun des deux seuls ne couvre
       fiables que "cons-def"), donc on les utilise UNIQUEMENT pour combler
       ce que "cons-def" ne couvre pas, jamais pour écraser une valeur déjà
       présente dans "cons-def".
-  
-Colonnes utilisées dans les fichiers bruts (identiques dans les deux) :
-- "Date et Heure" : horodatage ISO avec décalage explicite (+01:00/+02:00),
-  au pas de 15 minutes.
-- "Consommation (MW)" : la cible. Certaines lignes très récentes (dernier
-  quart d'heure publié) ont cette valeur vide en attendant la consolidation
-  -> traité comme valeur manquante, pas comme une erreur.
-- "Nature" : "Données définitives" / "Données consolidées" (cons-def) ou
-  "Données temps réel" (tr). Gardée telle quelle dans la colonne
-  source_donnee finale, pour l'audit de fiabilité (toutes les heures ne
-  sont pas au même niveau de consolidation).
 
 Ce script :
 1. lit les deux fichiers bruts (15 minutes) ;
@@ -36,7 +25,8 @@ Ce script :
 5. restreint à la période cible 2016-01-01 -> 2026-09-30 ;
 6. dérive les variables calendaires de base (heure, jour de semaine, mois,
    année, saison) à partir de l'heure de Paris ;
-7. ajoute la variable covid19 (période documentée) ;
+7. ajoute les variables covid19 / confinement_numero (3 périodes
+   officielles distinctes, voir PERIODES_COVID) ;
 8. gère les valeurs manquantes résiduelles (trous courts).
 """
 
@@ -55,11 +45,14 @@ FICHIER_DEF = RAW_DIR / "eco2mix_national_cons_def.csv"
 FICHIER_TR = RAW_DIR / "eco2mix_national_tr.csv"
 
 DATE_DEBUT = "2016-01-01"
-DATE_FIN = "2026-10-01" 
+DATE_FIN = "2026-10-01"
 
-# Période de Covid
-COVID_DEBUT = "2020-03-17"
-COVID_FIN = "2021-06-30"
+# Périodes de confinement national 
+PERIODES_COVID = [
+    ("2020-03-17", "2020-05-11"),  # confinement 1
+    ("2020-10-30", "2020-12-15"),  # confinement 2
+    ("2021-04-03", "2021-05-03"),  # confinement 3
+]
 
 ALIAS_COLONNES = {
     "timestamp": ["Date et Heure", "date_heure", "Date - Heure"],
@@ -207,12 +200,14 @@ def gerer_valeurs_manquantes(df):
 
 def ajouter_variables(df):
 
-    print("\nAjout des variables calendaires et de la période Covid...")
+    print("\nAjout des variables calendaires et des périodes de confinement...")
 
     df["timestamp_paris"] = df["timestamp_utc"].dt.tz_convert("Europe/Paris")
 
     df["heure"] = df["timestamp_paris"].dt.hour
     df["jour_semaine"] = df["timestamp_paris"].dt.dayofweek
+   
+    df["jour_annee"] = df["timestamp_paris"].dt.dayofyear
     df["mois"] = df["timestamp_paris"].dt.month
     df["annee"] = df["timestamp_paris"].dt.year
 
@@ -225,10 +220,22 @@ def ajouter_variables(df):
     df["saison"] = df["mois"].map(saisons)
 
     date_paris = df["timestamp_paris"].dt.tz_localize(None)
-    df["covid19"] = date_paris.between(COVID_DEBUT, COVID_FIN)
 
-    print(f"  → {df['covid19'].sum()} heures classées en période Covid "
-          f"({COVID_DEBUT} au {COVID_FIN})")
+    # covid19 : booléen, True sur n'importe laquelle des 3 périodes.
+    # confinement_numero : 1, 2, 3 ou <NA>, pour distinguer leur impact
+    # individuellement (le confinement 1 a un effet net sur la conso,
+    # les confinements 2 et 3 un effet plus faible, mêlé à la
+    # saisonnalité -> utile de pouvoir les traiter différemment).
+    df["covid19"] = False
+    df["confinement_numero"] = pd.array([None] * len(df), dtype="Int64")
+
+    for numero, (debut, fin) in enumerate(PERIODES_COVID, start=1):
+        masque = date_paris.between(debut, fin + " 23:59:59")
+        df.loc[masque, "covid19"] = True
+        df.loc[masque, "confinement_numero"] = numero
+        print(f"  → confinement {numero} ({debut} au {fin}) : {masque.sum()} heures")
+
+    print(f"  → total : {df['covid19'].sum()} heures classées en période de confinement")
 
     return df
 
@@ -249,7 +256,8 @@ if __name__ == "__main__":
 
     df = df[[
         "timestamp_utc", "timestamp_paris", "consommation_mw", "source_donnee",
-        "heure", "jour_semaine", "mois", "annee", "saison", "covid19",
+        "heure", "jour_semaine", "jour_annee", "mois", "annee", "saison",
+        "covid19", "confinement_numero",
     ]]
 
     print("\nTable finale :", df.shape)
@@ -261,6 +269,8 @@ if __name__ == "__main__":
     print("Plage :", df["timestamp_utc"].min(), "->", df["timestamp_utc"].max())
     print("\nRépartition par source :")
     print(df["source_donnee"].value_counts())
+    print("\nRépartition par confinement_numero :")
+    print(df["confinement_numero"].value_counts(dropna=False))
 
     chemin_sortie = PROCESSED_DIR / "consommation_electricite_horaire.csv"
     df.to_csv(chemin_sortie, index=False, encoding="utf-8")
