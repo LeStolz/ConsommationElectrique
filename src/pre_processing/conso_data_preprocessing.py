@@ -25,8 +25,8 @@ Ce script :
 5. restreint à la période cible 2016-01-01 -> 2026-09-30 ;
 6. dérive les variables calendaires de base (heure, jour de semaine, mois,
    année, saison) à partir de l'heure de Paris ;
-7. ajoute les variables covid19 / confinement_numero (3 périodes
-   officielles distinctes, voir PERIODES_COVID) ;
+7. ajoute la variable confinement_numero (3 périodes officielles
+   distinctes, voir PERIODES_COVID) ;
 8. gère les valeurs manquantes résiduelles (trous courts).
 """
 
@@ -47,7 +47,7 @@ FICHIER_TR = RAW_DIR / "eco2mix_national_tr.csv"
 DATE_DEBUT = "2016-01-01"
 DATE_FIN = "2026-10-01"
 
-# Périodes de confinement national 
+# Périodes de confinement national
 PERIODES_COVID = [
     ("2020-03-17", "2020-05-11"),  # confinement 1
     ("2020-10-30", "2020-12-15"),  # confinement 2
@@ -206,7 +206,7 @@ def ajouter_variables(df):
 
     df["heure"] = df["timestamp_paris"].dt.hour
     df["jour_semaine"] = df["timestamp_paris"].dt.dayofweek
-   
+
     df["jour_annee"] = df["timestamp_paris"].dt.dayofyear
     df["mois"] = df["timestamp_paris"].dt.month
     df["annee"] = df["timestamp_paris"].dt.year
@@ -221,21 +221,16 @@ def ajouter_variables(df):
 
     date_paris = df["timestamp_paris"].dt.tz_localize(None)
 
-    # covid19 : booléen, True sur n'importe laquelle des 3 périodes.
-    # confinement_numero : 1, 2, 3 ou <NA>, pour distinguer leur impact
-    # individuellement (le confinement 1 a un effet net sur la conso,
-    # les confinements 2 et 3 un effet plus faible, mêlé à la
-    # saisonnalité -> utile de pouvoir les traiter différemment).
-    df["covid19"] = False
+    # confinement_numero : 1, 2, 3 
     df["confinement_numero"] = pd.array([None] * len(df), dtype="Int64")
 
     for numero, (debut, fin) in enumerate(PERIODES_COVID, start=1):
         masque = date_paris.between(debut, fin + " 23:59:59")
-        df.loc[masque, "covid19"] = True
         df.loc[masque, "confinement_numero"] = numero
         print(f"  → confinement {numero} ({debut} au {fin}) : {masque.sum()} heures")
 
-    print(f"  → total : {df['covid19'].sum()} heures classées en période de confinement")
+    print(f"  → total : {df['confinement_numero'].notna().sum()} heures classées "
+          f"en période de confinement")
 
     return df
 
@@ -257,7 +252,7 @@ if __name__ == "__main__":
     df = df[[
         "timestamp_utc", "timestamp_paris", "consommation_mw", "source_donnee",
         "heure", "jour_semaine", "jour_annee", "mois", "annee", "saison",
-        "covid19", "confinement_numero",
+        "confinement_numero",
     ]]
 
     print("\nTable finale :", df.shape)
