@@ -76,7 +76,6 @@ class LinearRegressor(Regressor):
         ].drop_duplicates(subset='date').copy()
         cutoff['date'] += pd.DateOffset(days=1)
 
-        # Utilisation de map pour éviter de détruire l'index original (contrairement à merge)
         consumption_cutoff = cutoff.set_index('date')['consommation_mw']
         temperature_cutoff = cutoff.set_index('date')['temperature_c_pondere_pop']
         combined['consommation_mw_derniere_connue'] = combined['date'].map(consumption_cutoff)

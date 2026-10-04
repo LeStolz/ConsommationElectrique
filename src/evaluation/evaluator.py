@@ -58,12 +58,12 @@ class TimeSeriesEvaluator:
 
         return preds
 
-    def rolling_validation(self, model, df_train, df_val, step_size_hours=24):
+    def rolling_validation(self, model, df_train, df_val, step_size_days=1):
         """
         Validation walk-forward unifiée.
         - df_train : Historique initial
         - df_val : Données sur lesquelles on va évaluer de manière glissante
-        - step_size_hours : pas de réentraînement en heures (ex: 24 pour quotidien, 168 pour hebdomadaire)
+        - step_size_hours : pas de réentraînement en jours (ex: 1 pour quotidien, 7 pour hebdomadaire)
         """
         import numpy as np
         import sys
@@ -75,12 +75,12 @@ class TimeSeriesEvaluator:
         end = df_val[self.date_col].max() + pd.Timedelta(hours=1)
 
         # Génération des dates de coupure (cutoffs) avec l'intervalle en heures
-        cutoffs = pd.date_range(start=start, end=end, freq=f'{step_size_hours}h')
+        cutoffs = pd.date_range(start=start, end=end, freq=f'{step_size_days}D')
         if len(cutoffs) == 0 or cutoffs[-1] < end:
             cutoffs = cutoffs.append(pd.DatetimeIndex([end]))
 
         print(f"\n========== ROLLING VALIDATION : {model_name} ==========")
-        print(f"Évaluation sur {len(df_val)} lignes | Pas de réentraînement: {step_size_hours}h | {len(cutoffs)-1} itérations")
+        print(f"Évaluation sur {len(df_val)} lignes | Pas de réentraînement: {step_size_days} jours | {len(cutoffs)-1} itérations")
 
         all_preds = []
         all_y = []
@@ -108,7 +108,14 @@ class TimeSeriesEvaluator:
 
             if not current_val.empty:
                 model.fit(current_train)
-                preds = model.predict(current_val)
+                
+                # Censure totale du Test Set (J+1) avant la prédiction
+                # On masque toutes les valeurs physiques (floats) du futur 
+                # (Consommation, Température réelle) pour empêcher toute triche !
+                current_val_pred = current_val.copy()
+                current_val_pred[cols_to_mask] = np.nan
+                
+                preds = model.predict(current_val_pred)
 
                 all_preds.extend(preds)
                 all_y.extend(current_val[self.target_col].values)
@@ -126,7 +133,7 @@ class TimeSeriesEvaluator:
         rmse = root_mean_squared_error(all_y, all_preds)
         mape = (np.abs((np.array(all_y) - np.array(all_preds)) / np.array(all_y)).mean()) * 100
 
-        print(f"\n\nSCORE GLOBAL ROLLING ({step_size_hours}h) : MAE = {mae:.2f} MW | RMSE = {rmse:.2f} MW | MAPE = {mape:.2f}%\n")
+        print(f"\n\nSCORE GLOBAL ROLLING ({step_size_days} jours) : MAE = {mae:.2f} MW | RMSE = {rmse:.2f} MW | MAPE = {mape:.2f}%\n")
 
         self.results[model_name] = {'MAE': mae, 'RMSE': rmse, 'MAPE': mape}
         self.predictions[model_name] = pd.Series(all_preds, index=df_val.index)
