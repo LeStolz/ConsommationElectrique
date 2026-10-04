@@ -7,7 +7,7 @@ from sklearn.linear_model import LinearRegression
 def get_latest_known_value(df, of_col, at_hour):
     df[f'{of_col}_moins_1'] = df[of_col].shift(24)
     df[f'{of_col}_moins_2'] = df[of_col].shift(48)
-    before_hour_mask = df['timestamp_paris'].dt.hour <= at_hour
+    before_hour_mask = df['timestamp_utc'].dt.hour <= at_hour
     return np.where(before_hour_mask, df[f'{of_col}_moins_1'], df[f'{of_col}_moins_2'])
 
 
@@ -17,7 +17,7 @@ class LastWeekPersistenceRegressor(Regressor):
     identique à celle du même jour de la semaine dernière (J-7).
     """
     def fit(self, df_train):
-        self.history = df_train.tail(7 * 24).copy()
+        self.history = df_train.tail(366 * 24).copy()
 
 
     def predict(self, df_test):
@@ -58,8 +58,7 @@ class LinearRegressor(Regressor):
         self.model = LinearRegression()
         self.hour_of_prediction = hour_of_prediction
         self.features_cols = \
-            ['consommation_mw_moins_7', 'consommation_mw_derniere_connue', 'temperature_c_pondere_pop_derniere_connue'] \
-            + features_cols
+            ['consommation_mw_moins_7', 'consommation_mw_moins_365', 'consommation_mw_moins_366'] + features_cols
 
 
     def _build_features(self, df, history=None):
@@ -69,22 +68,30 @@ class LinearRegressor(Regressor):
             combined = df.copy()
 
         combined['consommation_mw_moins_7'] = combined['consommation_mw'].shift(7 * 24)
+        combined['consommation_mw_moins_365'] = combined['consommation_mw'].shift(365 * 24)
+        combined['consommation_mw_moins_366'] = combined['consommation_mw'].shift(366 * 24)
 
-        combined['date'] = combined['timestamp_paris'].dt.normalize()
+        lastest_known_cols = [
+            col.split('_derniere_connue')[0]
+            for col in self.features_cols if '_derniere_connue' in col and '_meme_heure' not in col
+        ]
+        lastest_known_same_hour_cols = [
+            col.split('_meme_heure_derniere_connue')[0]
+            for col in self.features_cols if '_meme_heure_derniere_connue' in col
+        ]
+
+        combined['date'] = combined['timestamp_utc'].dt.normalize()
         cutoff = combined.loc[
-            combined['timestamp_paris'].dt.hour == self.hour_of_prediction, ['date', 'consommation_mw', 'temperature_c_pondere_pop']
+            combined['timestamp_utc'].dt.hour == self.hour_of_prediction, ['date'] + lastest_known_cols
         ].drop_duplicates(subset='date').copy()
         cutoff['date'] += pd.DateOffset(days=1)
 
-        consumption_cutoff = cutoff.set_index('date')['consommation_mw']
-        temperature_cutoff = cutoff.set_index('date')['temperature_c_pondere_pop']
-        combined['consommation_mw_derniere_connue'] = combined['date'].map(consumption_cutoff)
-        combined['temperature_c_pondere_pop_derniere_connue'] = combined['date'].map(temperature_cutoff)
+        for col in lastest_known_cols:
+            col_cutoff = cutoff.set_index('date')[col]
+            combined[f'{col}_derniere_connue'] = combined['date'].map(col_cutoff)
 
-        for col in self.features_cols:
-            if col not in combined.columns and '_meme_heure_derniere_connue' in col:
-                combined[col] = \
-                    get_latest_known_value(combined, col.split('_meme_heure_derniere_connue')[0], self.hour_of_prediction)
+        for col in lastest_known_same_hour_cols:
+            combined[f'{col}_meme_heure_derniere_connue'] = get_latest_known_value(combined, col, self.hour_of_prediction)
 
         if history is not None:
             return combined.loc[df.index].copy()
@@ -93,8 +100,8 @@ class LinearRegressor(Regressor):
 
 
     def fit(self, df_train):
-        # Conserve les 7 derniers jours du train set pour construire les features du test set
-        self.history = df_train.tail(7 * 24).copy()
+        # Conserve les 366 derniers jours du train set pour construire les features du test set
+        self.history = df_train.tail(366 * 24).copy()
 
         df_features = self._build_features(df_train)
 
