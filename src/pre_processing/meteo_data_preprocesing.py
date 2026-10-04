@@ -20,7 +20,6 @@ import pandas as pd
 from pathlib import Path
 
 
-
 # PARAMS
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -32,8 +31,10 @@ PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 DATE_DEBUT = "2016-01-01"
 DATE_FIN = "2026-10-01"
 
-ANNEES = range(2016, 2027) 
+ANNEES = range(2016, 2027)
 
+# Stations retenues : une par région de France métropolitaine (13 régions
+# couvertes sur 13, vérifié contre la liste officielle des postes SYNOP).
 STATIONS = {
     7190: "STRASBOURG-ENTZHEIM",
     7481: "LYON-ST EXUPERY",
@@ -44,8 +45,8 @@ STATIONS = {
     7222: "NANTES-BOUGUENAIS",
     7130: "RENNES-ST JACQUES",
     7630: "TOULOUSE-BLAGNAC",
-    7240: "TOURS",            
-    7280: "DIJON-LONGVIC",    
+    7240: "TOURS",             # Centre-Val de Loire
+    7280: "DIJON-LONGVIC",     # Bourgogne-Franche-Comté
     7027: "CAEN-CARPIQUET",    # Normandie
     7761: "AJACCIO",           # Corse
 }
@@ -109,8 +110,6 @@ def lire_annee(annee):
 
     return df
 
-
-
 def nettoyer(df):
 
     print("\nNettoyage et conversion des unités...")
@@ -162,9 +161,14 @@ def mettre_a_heure_et_agreger(df):
         sous_df = sous_df[variables].sort_index()
 
         sous_df = sous_df.resample("1h").mean()
-        # Étape 2 (par station) : interpolation linéaire, petits trous
-        # seulement (<= 3h). 
-        sous_df = sous_df.interpolate(method="linear", limit=3)
+        # Les stations ne publient souvent qu'une observation toutes les
+        # 3h -> on reporte la dernière valeur connue (ffill) sur les
+        # heures intermédiaires manquantes, limité à 3h. Pas
+        # d'interpolation linéaire : on ne veut jamais qu'une valeur
+        # dépende d'une observation future par rapport à son propre
+        # horodatage (ex. météo[13h] = météo[14h] = dernière valeur
+        # connue à 12h, pas une moyenne entre 12h et 15h).
+        sous_df = sous_df.ffill(limit=3)
 
         sous_df["geo_id_wmo"] = station_id
         series_par_station.append(sous_df)
@@ -172,13 +176,12 @@ def mettre_a_heure_et_agreger(df):
     concat = pd.concat(series_par_station)
     concat["poids"] = concat["geo_id_wmo"].map(POPULATION)
 
-    # --- 1. Moyenne simple 
+    # 1. Moyenne simple 
     national = concat.groupby(concat.index)[variables].mean()
 
-    # 2. Moyenne pondérée par population régionale 
+    #  2. Moyenne pondérée par population régionale
     # Pour chaque variable, on ignore les stations sans valeur cette
     # heure-là à la fois dans la somme pondérée ET dans la somme des poids
-    # (sinon une station manquante fausserait le dénominateur).
     colonnes_ponderees = {}
     for var in variables:
         poids_valides = concat["poids"].where(concat[var].notna())
@@ -195,35 +198,32 @@ def mettre_a_heure_et_agreger(df):
 
     grille_cible = pd.date_range(DATE_DEBUT, DATE_FIN, freq="1h", tz="UTC", inclusive="left")
     national = national.reindex(grille_cible)
+
     n_absentes = national[toutes_colonnes].isna().all(axis=1).sum()
     print(f"  → {n_absentes} heures où les 13 stations sont absentes en même temps")
 
-    # Étape 2 : interpolation linéaire, petits trous
-    # seulement (<= 3h)
     n_avant = national[toutes_colonnes].isna().sum().sum()
-    national[toutes_colonnes] = national[toutes_colonnes].interpolate(
-        method="linear", limit=3
-    )
-    n_apres_interp = national[toutes_colonnes].isna().sum().sum()
-    print(f"  Étape 2 (interpolation <=3h) : {n_avant - n_apres_interp} valeurs "
-          f"comblées, {n_apres_interp} valeurs manquantes restantes")
+    national[toutes_colonnes] = national[toutes_colonnes].ffill(limit=3)
+    n_apres_report = national[toutes_colonnes].isna().sum().sum()
+    print(f"  Étape 2 (report <=3h, valeur précédente) : "
+          f"{n_avant - n_apres_report} valeurs comblées, "
+          f"{n_apres_report} valeurs manquantes restantes")
 
-    # Étape 3 : pour ce qui reste (trou > 3h), on prend la valeur de la
-    # même heure le jour disponible le plus proche , la veille si
-    # dispo (ffill), sinon le lendemain (bfill), sinon plus loin dans le
-    # temps. 
+
     national["_heure_du_jour"] = national.index.hour
     for h in range(24):
         masque = national["_heure_du_jour"] == h
         national.loc[masque, toutes_colonnes] = (
-            national.loc[masque, toutes_colonnes].sort_index().ffill().bfill()
+            national.loc[masque, toutes_colonnes].sort_index().ffill()
         )
     national = national.drop(columns=["_heure_du_jour"])
 
     n_apres_fallback = national[toutes_colonnes].isna().sum().sum()
-    print(f"  Étape 3 (même heure, jour dispo le plus proche) : "
-          f"{n_apres_interp - n_apres_fallback} valeurs comblées en plus, "
-          f"{n_apres_fallback} valeurs manquantes restantes au total.")
+    print(f"  Étape 3 (même heure, jour précédent dispo) : "
+          f"{n_apres_report - n_apres_fallback} valeurs comblées en plus, "
+          f"{n_apres_fallback} valeurs manquantes restantes au total "
+          f"(uniquement possible tout début de série, si aucun jour "
+          f"précédent n'existe encore).")
 
     national = national.reset_index().rename(columns={"index": "timestamp_utc"})
 
@@ -237,8 +237,7 @@ def mettre_a_heure_et_agreger(df):
         n_negatives = (national[col] < 0).sum()
         if n_negatives > 0:
             print(f"  Anomalie détectée sur {col} : {n_negatives} valeurs de "
-                  f"précipitation négatives après interpolation (artefact "
-                  f"numérique) -> tronquées à 0")
+                  f"précipitation négatives -> tronquées à 0")
         national[col] = national[col].clip(lower=0)
 
     return national
