@@ -1,4 +1,4 @@
-import pandas as pd
+﻿import pandas as pd
 import numpy as np
 import sys
 import matplotlib.pyplot as plt
@@ -13,6 +13,10 @@ class TimeSeriesEvaluator:
         self.df = df.sort_values(date_col).copy()
         self.target_col = target_col
         self.date_col = date_col
+
+        if not pd.api.types.is_datetime64_any_dtype(self.df[self.date_col]):
+            self.df[self.date_col] = pd.to_datetime(self.df[self.date_col], utc=True).dt.tz_convert('Europe/Paris')
+
         self.results = {}
         self.predictions = {}
 
@@ -54,26 +58,29 @@ class TimeSeriesEvaluator:
 
         return preds
 
-    def rolling_validation(self, model, start_date, end_date, step_size='1D'):
+    def rolling_validation(self, model, df_train, df_val, step_size_hours=24):
         """
         Validation walk-forward unifiée.
-        Permet de tester avec n'importe quelle fréquence de réentraînement.
-        - step_size='1D' : ré-entraînement quotidien
-        - step_size='1MS' : ré-entraînement mensuel
-        - step_size='1YS' : ré-entraînement annuel
+        - df_train : Historique initial
+        - df_val : Données sur lesquelles on va évaluer de manière glissante
+        - step_size_hours : pas de réentraînement en heures (ex: 24 pour quotidien, 168 pour hebdomadaire)
         """
+        import numpy as np
+        import sys
+
         model_name = model.__class__.__name__
 
-        start = pd.to_datetime(start_date).tz_localize('Europe/Paris')
-        end = pd.to_datetime(end_date).tz_localize('Europe/Paris')
+        df_combined = pd.concat([df_train, df_val]).sort_values(self.date_col)
+        start = df_val[self.date_col].min()
+        end = df_val[self.date_col].max() + pd.Timedelta(hours=1)
 
-        # Génération des dates de coupure (cutoffs)
-        cutoffs = pd.date_range(start=start, end=end, freq=step_size)
+        # Génération des dates de coupure (cutoffs) avec l'intervalle en heures
+        cutoffs = pd.date_range(start=start, end=end, freq=f'{step_size_hours}h')
         if len(cutoffs) == 0 or cutoffs[-1] < end:
             cutoffs = cutoffs.append(pd.DatetimeIndex([end]))
 
         print(f"\n========== ROLLING VALIDATION : {model_name} ==========")
-        print(f"Période: {start_date} -> {end_date} | Pas de réentraînement: {step_size} | {len(cutoffs)-1} itérations")
+        print(f"Évaluation sur {len(df_val)} lignes | Pas de réentraînement: {step_size_hours}h | {len(cutoffs)-1} itérations")
 
         all_preds = []
         all_y = []
@@ -82,30 +89,47 @@ class TimeSeriesEvaluator:
             current_date = cutoffs[i]
             next_date = cutoffs[i+1]
 
-            df_train = self.df[self.df[self.date_col] < current_date].copy()
-            df_test = self.df[(self.df[self.date_col] >= current_date) & (self.df[self.date_col] < next_date)].copy()
+            # Le Train grossit en absorbant progressivement df_val
+            current_train = df_combined[df_combined[self.date_col] < current_date].copy()
+            current_val = df_combined[(df_combined[self.date_col] >= current_date) & (df_combined[self.date_col] < next_date)].copy()
 
-            if not df_test.empty:
-                model.fit(df_train)
-                preds = model.predict(df_test)
+            # --- SÉCURITÉ ANTI DATA-LEAK ---
+            # Au lieu de supprimer physiquement les lignes (ce qui détruirait le décalage de `.shift(24)`),
+            # on censure (remplace par NaN) toutes les données du jour J après 14h.
+            if not current_train.empty:
+                last_date = current_train[self.date_col].dt.date.max()
+                mask_leak = (current_train[self.date_col].dt.date == last_date) & (current_train[self.date_col].dt.hour > 14)
+                
+                # On ne masque que les colonnes de type float (consommation, température, vent, etc.)
+                # Les variables booléennes ou entières (calendrier, férié) restent connues à 14h !
+                float_cols = current_train.select_dtypes(include=['float', 'float32', 'float64']).columns
+                cols_to_mask = [c for c in float_cols if c not in ['timestamp_utc', 'timestamp_paris']]
+                current_train.loc[mask_leak, cols_to_mask] = np.nan
+
+            if not current_val.empty:
+                model.fit(current_train)
+                preds = model.predict(current_val)
 
                 all_preds.extend(preds)
-                all_y.extend(df_test[self.target_col].values)
+                all_y.extend(current_val[self.target_col].values)
 
-            # Affichage adaptatif pour ne pas spammer la console si itérations quotidiennes
+            # Affichage adaptatif
             if len(cutoffs) > 20:
-                sys.stdout.write(f"\rProgression: {current_date.strftime('%Y-%m-%d')}...")
+                sys.stdout.write(f"\rProgression: {current_date.strftime('%Y-%m-%d %H:%M')}...")
                 sys.stdout.flush()
             else:
-                if not df_test.empty:
-                    mae = mean_absolute_error(df_test[self.target_col], preds)
+                if not current_val.empty:
+                    mae = mean_absolute_error(current_val[self.target_col], preds)
                     print(f"[{current_date.strftime('%Y-%m-%d')}] MAE: {mae:.2f} MW")
 
         mae = mean_absolute_error(all_y, all_preds)
         rmse = root_mean_squared_error(all_y, all_preds)
         mape = (np.abs((np.array(all_y) - np.array(all_preds)) / np.array(all_y)).mean()) * 100
 
-        print(f"\n\nSCORE GLOBAL ROLLING ({step_size}) : MAE = {mae:.2f} MW | RMSE = {rmse:.2f} MW | MAPE = {mape:.2f}%\n")
+        print(f"\n\nSCORE GLOBAL ROLLING ({step_size_hours}h) : MAE = {mae:.2f} MW | RMSE = {rmse:.2f} MW | MAPE = {mape:.2f}%\n")
+
+        self.results[model_name] = {'MAE': mae, 'RMSE': rmse, 'MAPE': mape}
+        self.predictions[model_name] = pd.Series(all_preds, index=df_val.index)
 
         return {'MAE': mae, 'RMSE': rmse, 'MAPE': mape}
 
