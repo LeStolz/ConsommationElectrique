@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 import pandas as pd
+import numpy as np
 
 
 class Regressor(ABC):
@@ -16,7 +17,7 @@ class Regressor(ABC):
 
 
     @abstractmethod
-    def predict(self, df_test: pd.DataFrame):
+    def predict(self, df_test: pd.DataFrame) -> pd.Series | np.ndarray:
         """
         Génère les prédictions pour la période de test.
         Doit retourner une Pandas Series ou un array de la même taille que df_test.
