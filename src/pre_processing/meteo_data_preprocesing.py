@@ -13,32 +13,15 @@ Ce script :
      chaque station (colonnes suffixées "_pondere_pop") -> plus pertinente
      pour la conso électrique, qui suit surtout les zones peuplées
      (Paris pèse beaucoup plus que Rennes dans la conso nationale).
-7. sauvegarde le résultat dans data/processed/.
 
-Important (à comprendre, pas juste à exécuter) :
-Ce script construit la table d'observations météo *brute et complète*.
-L'interpolation faite ici peut utiliser des points avant ET après un trou
-(c'est une opération de nettoyage de données, pas encore une prévision).
-La règle "pas de donnée après 14h le jour J" s'appliquera plus tard, au
-moment de construire les variables (features) pour chaque prévision,
-pas ici. Les deux étapes sont volontairement séparées.
-
-Les 13 stations couvrent maintenant les 13 régions de France métropolitaine
-(une station par région, vérifié contre la liste officielle des postes
-SYNOP de Météo-France). La moyenne pondérée par population reste malgré
-tout une approximation : une seule station par région masque les écarts
-météo à l'intérieur d'une même région (ex. littoral vs intérieur des
-terres), et les poids de population sont des ordres de grandeur, pas des
-chiffres précis par bassin de consommation électrique.
 """
 
 import pandas as pd
 from pathlib import Path
 
 
-# ============================================================
-# PARAMÈTRES
-# ============================================================
+
+# PARAMS
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
@@ -46,16 +29,11 @@ RAW_DIR = BASE_DIR / "data" / "raw" / "synop_meteo"
 PROCESSED_DIR = BASE_DIR / "data" / "processed"
 PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
-ANNEES = range(2016, 2027)  # à ajuster selon les fichiers que tu as téléchargés
-# ATTENTION : la période cible du projet a été étendue à 2016 -> sept. 2026.
-# Il faut donc re-télécharger/compléter les fichiers synop_2016.csv,
-# synop_2017.csv, synop_2018.csv (anciens, absents jusqu'ici) et
-# synop_2026.csv (données de l'année en cours) dans data/raw/synop_meteo/,
-# sinon ce script les ignorera silencieusement ([absent] affiché) et la
-# météo manquera sur ces années lors de la fusion.
+DATE_DEBUT = "2016-01-01"
+DATE_FIN = "2026-10-01"
 
-# Stations retenues : une par région de France métropolitaine (13 régions
-# couvertes sur 13, vérifié contre la liste officielle des postes SYNOP).
+ANNEES = range(2016, 2027) 
+
 STATIONS = {
     7190: "STRASBOURG-ENTZHEIM",
     7481: "LYON-ST EXUPERY",
@@ -66,16 +44,13 @@ STATIONS = {
     7222: "NANTES-BOUGUENAIS",
     7130: "RENNES-ST JACQUES",
     7630: "TOULOUSE-BLAGNAC",
-    7240: "TOURS",             # Centre-Val de Loire
-    7280: "DIJON-LONGVIC",     # Bourgogne-Franche-Comté
+    7240: "TOURS",            
+    7280: "DIJON-LONGVIC",    
     7027: "CAEN-CARPIQUET",    # Normandie
     7761: "AJACCIO",           # Corse
 }
 
-# Population (ordre de grandeur, source INSEE) de la région représentée par
-# chaque station, utilisée comme poids pour la moyenne pondérée. Ce ne sont
-# pas des chiffres au-ha habitant près, c'est une pondération volontairement
-# approximative (pas besoin de plus de précision pour ce qu'on en fait).
+# Population (ordre de grandeur, source INSEE)
 POPULATION = {
     7190: 5_500_000,   # Strasbourg - Grand Est
     7481: 8_100_000,   # Lyon - Auvergne-Rhône-Alpes
@@ -92,7 +67,7 @@ POPULATION = {
     7761: 340_000,     # Ajaccio - Corse
 }
 
-# Colonnes du fichier brut qu'on garde (voir le dictionnaire SYNOP pour le reste)
+# Colonnes du fichier brut qu'on garde 
 COLONNES_UTILES = [
     "geo_id_wmo",   # identifiant de la station
     "validity_time",  # horodatage de l'observation (déjà en UTC)
@@ -106,9 +81,6 @@ COLONNES_UTILES = [
 ]
 
 
-# ============================================================
-# LECTURE ET FILTRAGE D'UNE ANNÉE
-# ============================================================
 
 def lire_annee(annee):
     """Lit un fichier synop_AAAA.csv et ne garde que les stations retenues."""
@@ -138,9 +110,6 @@ def lire_annee(annee):
     return df
 
 
-# ============================================================
-# NETTOYAGE ET CONVERSION DES UNITÉS
-# ============================================================
 
 def nettoyer(df):
 
@@ -176,10 +145,6 @@ def nettoyer(df):
     return df
 
 
-# ============================================================
-# PASSAGE À L'HEURE + AGRÉGATION NATIONALE (simple ET pondérée)
-# ============================================================
-
 def mettre_a_heure_et_agreger(df):
 
     print("\nPassage à l'heure et agrégation des stations...")
@@ -197,20 +162,20 @@ def mettre_a_heure_et_agreger(df):
         sous_df = sous_df[variables].sort_index()
 
         sous_df = sous_df.resample("1h").mean()
+        # Étape 2 (par station) : interpolation linéaire, petits trous
+        # seulement (<= 3h). 
         sous_df = sous_df.interpolate(method="linear", limit=3)
 
         sous_df["geo_id_wmo"] = station_id
         series_par_station.append(sous_df)
 
-    # Toutes les stations empilées, avec leur identifiant conservé (nécessaire
-    # pour pondérer par population ensuite).
     concat = pd.concat(series_par_station)
     concat["poids"] = concat["geo_id_wmo"].map(POPULATION)
 
-    # --- 1. Moyenne simple (comme avant) : chaque station compte pareil ---
+    # --- 1. Moyenne simple 
     national = concat.groupby(concat.index)[variables].mean()
 
-    # --- 2. Moyenne pondérée par population régionale ---
+    # 2. Moyenne pondérée par population régionale 
     # Pour chaque variable, on ignore les stations sans valeur cette
     # heure-là à la fois dans la somme pondérée ET dans la somme des poids
     # (sinon une station manquante fausserait le dénominateur).
@@ -225,7 +190,42 @@ def mettre_a_heure_et_agreger(df):
     national_pondere = pd.DataFrame(colonnes_ponderees)
 
     national = national.join(national_pondere)
-    national = national.reset_index().rename(columns={"validity_time": "timestamp_utc"})
+
+    toutes_colonnes = variables + [f"{v}_pondere_pop" for v in variables]
+
+    grille_cible = pd.date_range(DATE_DEBUT, DATE_FIN, freq="1h", tz="UTC", inclusive="left")
+    national = national.reindex(grille_cible)
+    n_absentes = national[toutes_colonnes].isna().all(axis=1).sum()
+    print(f"  → {n_absentes} heures où les 13 stations sont absentes en même temps")
+
+    # Étape 2 : interpolation linéaire, petits trous
+    # seulement (<= 3h)
+    n_avant = national[toutes_colonnes].isna().sum().sum()
+    national[toutes_colonnes] = national[toutes_colonnes].interpolate(
+        method="linear", limit=3
+    )
+    n_apres_interp = national[toutes_colonnes].isna().sum().sum()
+    print(f"  Étape 2 (interpolation <=3h) : {n_avant - n_apres_interp} valeurs "
+          f"comblées, {n_apres_interp} valeurs manquantes restantes")
+
+    # Étape 3 : pour ce qui reste (trou > 3h), on prend la valeur de la
+    # même heure le jour disponible le plus proche , la veille si
+    # dispo (ffill), sinon le lendemain (bfill), sinon plus loin dans le
+    # temps. 
+    national["_heure_du_jour"] = national.index.hour
+    for h in range(24):
+        masque = national["_heure_du_jour"] == h
+        national.loc[masque, toutes_colonnes] = (
+            national.loc[masque, toutes_colonnes].sort_index().ffill().bfill()
+        )
+    national = national.drop(columns=["_heure_du_jour"])
+
+    n_apres_fallback = national[toutes_colonnes].isna().sum().sum()
+    print(f"  Étape 3 (même heure, jour dispo le plus proche) : "
+          f"{n_apres_interp - n_apres_fallback} valeurs comblées en plus, "
+          f"{n_apres_fallback} valeurs manquantes restantes au total.")
+
+    national = national.reset_index().rename(columns={"index": "timestamp_utc"})
 
     national["timestamp_paris"] = national["timestamp_utc"].dt.tz_convert("Europe/Paris")
     colonnes = ["timestamp_utc", "timestamp_paris"] + [
@@ -243,10 +243,6 @@ def mettre_a_heure_et_agreger(df):
 
     return national
 
-
-# ============================================================
-# PROGRAMME PRINCIPAL
-# ============================================================
 
 if __name__ == "__main__":
 
