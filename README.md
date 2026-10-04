@@ -50,9 +50,8 @@ Deux fichiers sont nécessaires (téléchargés à la main sur le portail ODRE /
    * **Confinement 1** : Rupture nette et bien isolée — la consommation chute et remonte quasiment exactement aux dates officielles (moyenne pendant : **-28,5 %** vs avant). C'est le confinement le plus strict (arrêts d'usines, écoles fermées, télétravail généralisé), donc l'effet est net et peu confondu avec autre chose.
    * **Confinements 2 et 3** : Effet réel mais plus faible et en partie confondu avec la saisonnalité normale (la consommation continue de monter/descendre dans le même sens avant, pendant et après la période rouge, car on entre/sort de l'hiver). Logique : ces confinements étaient moins stricts (écoles ouvertes, plus d'activité économique maintenue).
 
-3. **Décision retenue** : Garder les 3 fenêtres officielles (ce sont les dates des décrets, la référence la plus objective disponible), plutôt qu'une seule grande tranche qui aurait inclus ~13 mois de "normalité" entre les 3 épisodes (été 2020, plusieurs semaines entre chaque confinement) comme période "Covid". Deux variables sont construites :
-   * `covid19` (booléen) : `True` sur n'importe laquelle des 3 périodes.
-   * `confinement_numero` (`1`, `2`, `3` ou vide) : Permet de distinguer/pondérer différemment les 3 épisodes en modélisation, plutôt que de tout regrouper dans un seul indicateur — utile puisque leur effet sur la consommation n'est pas le même (confinement 1 >> confinements 2 et 3).
+3. **Décision retenue** : Garder les 3 fenêtres officielles (ce sont les dates des décrets, la référence la plus objective disponible), plutôt qu'une seule grande tranche qui aurait inclus ~13 mois de "normalité" entre les 3 épisodes (été 2020, plusieurs semaines entre chaque confinement) comme période "Covid". La variable construite est :
+   * `confinement_numero` (`1`, `2`, `3` ou vide) : permet de distinguer/pondérer différemment les 3 épisodes en modélisation (et de filtrer "en confinement" avec `confinement_numero.notna()`), plutôt que de tout regrouper dans un seul indicateur booléen — utile puisque leur effet sur la consommation n'est pas le même (confinement 1 >> confinements 2 et 3).
    * **Répartition obtenue** : Confinement 1 = 1 343 h, Confinement 2 = 1 128 h, Confinement 3 = 744 h (**3 215 h au total**, sur 94 224 h).
 
 ---
@@ -97,7 +96,21 @@ Chaque variable est déclinée en **moyenne simple** et en **moyenne pondérée 
 
 Plus `timestamp_utc` et `timestamp_paris`.
 
-**Traitement** : observations ramenées à l'heure (`resample 1h`, interpolation linéaire limitée à 3h de trou), agrégées sur les 13 stations. Période couverte : 2016-01-01 → 2026-10-01 (94 246 lignes).
+**Traitement** : observations ramenées à l'heure (`resample 1h`), agrégées sur les 13 stations.
+
+#### Gestion des valeurs manquantes (température et autres variables météo)
+
+Le traitement se fait en 3 situations, dans cet ordre (chaque étape ne traite que ce que la précédente n'a pas réussi à combler) :
+
+1. **Une (ou quelques) station(s) manquante(s), pas toutes** → elle(s) est/sont ignorée(s) dans la moyenne (simple et pondérée par population), qui se recalcule sur les stations restantes. Aucune interpolation n'est nécessaire dans ce cas : il y a toujours un résultat tant qu'au moins une station a une valeur.
+2. **Les 13 stations manquantes en même temps, trou ≤ 3h** → interpolation linéaire (droite entre la valeur juste avant et juste après le trou, limitée à 3h pour rester fiable : sur un trou plus long, une droite ignorerait le cycle jour/nuit).
+3. **Les 13 stations manquantes en même temps, trou > 3h** → repli sur la **même heure du jour disponible le plus proche** (la veille si disponible, sinon le lendemain), plutôt qu'une interpolation étendue qui inventerait une tendance sur une période trop longue.
+
+Script : `src/pre_processing/meteo_data_preprocessing.py`.
+
+Heures concernées par l'étape 3 (trous > 3h sur les 13 stations simultanément) — deux groupes de trous plus longs identifiés (juillet 2023, avril 2026), le reste sont des trous isolés de quelques heures :
+
+![Heures avec température manquante](../reports/figures/heures_temperature_manquante.png)
 
 ---
 
@@ -116,8 +129,7 @@ Plus `timestamp_utc` et `timestamp_paris`.
 | `jour_semaine` | 0=Lundi … 6=Dimanche |
 | `mois` | 1-12 |
 | `weekend` | Booléen (Samedi / Dimanche) |
-| `nom_ferie` | Nom du jour férié (ou vide) |
-| `ferie` | Booléen |
+| `ferie` | Booléen (jour férié) |
 | `vacances` | **Nombre de zones (0 à 3)** en vacances scolaires ce jour-là — pas un simple booléen, car un jour où les 3 zones sont en vacances (ex. Noël) n'a pas le même effet sur la conso nationale qu'un jour où une seule zone l'est (ex. vacances d'hiver décalées par zone) |
 
 * **Période couverte** : 01/01/2016 → 30/09/2026 (**94 224 lignes**).
@@ -158,7 +170,7 @@ Un protocole parfait qui utilise a posteriori les infos (météo,...) observées
 - When covid?
 - données ND (non dispo).
 
-- **Période Covid** : la variable `covid19` est disponible, mais la décision de l'exclure ou non de l'entraînement n'est pas encore prise — à documenter dans le protocole de validation on peut utiliser:
+- **Période Covid** : la variable `confinement_numero` est disponible, mais la décision de l'exclure ou non de l'entraînement n'est pas encore prise — à documenter dans le protocole de validation on peut utiliser:
 	1.  2022-2026
 	2.  2019-2026 avec un feature pour covid
 	3.  2019-2026 sans covid feature
@@ -168,7 +180,7 @@ Un protocole parfait qui utilise a posteriori les infos (météo,...) observées
 
 
 - **Fiabilité variable de la consommation récente** : les heures de juillet-septembre 2026 reposent sur des données "temps réel" encore révisables (`source_donnee` = "Données temps réel"), contrairement au reste de la série (consolidé/définitif) — point à traiter explicitement dans l'audit critique (disponibilité de l'information).
-- **Valeurs manquantes résiduelles côté météo** (107 à 598 heures selon la variable) : à traiter (interpolation ou exclusion) avant de construire les variables de prévision.
+- **Valeurs manquantes résiduelles côté météo** : traitées par le script (voir section 2, "Gestion des valeurs manquantes") — interpolation ≤3h puis repli sur la même heure du jour disponible le plus proche, plus de valeur manquante en sortie.
 - **Retards de consommation et distinction scénario opérationnel / météo parfaite** : pas encore construits — relèvent de l'étape de modélisation, pas de la préparation des données.
 
 pourquoi cest donnee
@@ -292,3 +304,4 @@ Les 24 heures peuvent être prévues séparément ou conjointement.
 │   ├── models/                # Entraînement et inférence des modèles
 │   └── evaluation/            # Calcul des métriques et analyse d'erreurs
 └── README.md
+```
