@@ -9,13 +9,13 @@ class TimeSeriesEvaluator:
     Classe universelle pour évaluer les modèles de prévision temporelle.
     Gère le découpage chronologique, l'entraînement, l'inférence et le calcul des métriques.
     """
-    def __init__(self, df, target_col='consommation_mw', date_col='timestamp_paris'):
-        self.df = df.sort_values(date_col).copy()
+    def __init__(self, df, target_col='consommation_mw'):
+        self.df = df.sort_values('timestamp_paris').copy()
         self.target_col = target_col
-        self.date_col = date_col
+        self.date_col = 'timestamp_paris'
 
-        if not pd.api.types.is_datetime64_any_dtype(self.df[self.date_col]):
-            self.df[self.date_col] = pd.to_datetime(self.df[self.date_col], utc=True)
+        self.df['timestamp_utc'] = pd.to_datetime(self.df['timestamp_utc'], utc=True)
+        self.df[self.date_col] = pd.to_datetime(self.df[self.date_col], utc=True).dt.tz_convert('Europe/Paris')
 
         self.results = {}
         self.predictions = {}

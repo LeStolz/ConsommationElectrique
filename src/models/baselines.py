@@ -14,11 +14,11 @@ def get_lagged_local_value(df_target, df_history, lag_days, col):
     """
     target_dates = df_target['timestamp_paris'].dt.date - pd.Timedelta(days=lag_days)
     target_hours = df_target['timestamp_paris'].dt.hour
-    target_utc_hours = pd.to_datetime(df_target['timestamp_utc']).dt.hour
+    target_utc_hours = df_target['timestamp_utc'].dt.hour
 
     hist_dates = df_history['timestamp_paris'].dt.date
     hist_hours = df_history['timestamp_paris'].dt.hour
-    hist_utc_hours = pd.to_datetime(df_history['timestamp_utc']).dt.hour
+    hist_utc_hours = df_history['timestamp_utc'].dt.hour
 
     hist_df = pd.DataFrame({
         'date': hist_dates,
@@ -75,9 +75,21 @@ def get_latest_local_value(df_target, df_history, col, at_hour_local):
     return np.where(before_hour_mask, val_j1, val_j2)
 
 
+class AverageRegressor(Regressor):
+    """
+    Prédit que la consommation de demain sera exactement identique à la moyenne.
+    """
+    def fit(self, df_train):
+        self.mean = df_train['consommation_mw'].mean()
+
+
+    def predict(self, df_test):
+        return pd.Series(self.mean, index=df_test.index)
+
+
 class LastWeekPersistenceRegressor(Regressor):
     """
-    Baseline 1 : Prédit que la consommation de demain sera exactement
+    Prédit que la consommation de demain sera exactement
     identique à celle du même jour de la semaine dernière (J-7).
     """
     def fit(self, df_train):
@@ -93,7 +105,7 @@ class LastWeekPersistenceRegressor(Regressor):
 
 class YesterdayPersistenceRegressor(Regressor):
     """
-    Baseline 2 : Prédit la consommation de la veille SI elle est connue à 14h,
+    Prédit la consommation de la veille SI elle est connue à 14h,
     sinon se rabat sur l'avant-veille.
     """
     def __init__(self, pred_hour_local=14):
@@ -113,12 +125,13 @@ class YesterdayPersistenceRegressor(Regressor):
 
 class LinearRegressor(Regressor):
     """
-    Baseline 3 : Régression linéaire simple utilisant le calendrier et la météo.
+    Régression linéaire simple utilisant le calendrier et la météo.
     """
     def __init__(self, pred_hour_local=14, model=LinearRegression, features_cols=[]):
         self.model = model()
         self.pred_hour_local = pred_hour_local
         self.features_cols = features_cols
+        self._cached_features = None
 
 
     def _build_features(self, df, history=None):
@@ -164,7 +177,18 @@ class LinearRegressor(Regressor):
 
     def fit(self, df_train):
         self.history = df_train.tail(366 * 24 + 2).copy()
-        df_features = self._build_features(df_train)
+
+        if self._cached_features is None:
+            self._cached_features = self._build_features(df_train)
+        else:
+            new_idx = df_train.index.difference(self._cached_features.index)
+            if len(new_idx) > 0:
+                new_rows = df_train.loc[new_idx]
+                needed_history = df_train.loc[~df_train.index.isin(new_idx)].tail(366 * 24 + 2)
+                new_features = self._build_features(new_rows, history=needed_history)
+                self._cached_features = pd.concat([self._cached_features, new_features])
+
+        df_features = self._cached_features.loc[df_train.index]
         df_features = df_features.dropna(subset=self.features_cols + ['consommation_mw'])
         self.model.fit(df_features[self.features_cols], df_features['consommation_mw'])
 
@@ -177,7 +201,7 @@ class LinearRegressor(Regressor):
 
 class SimilarDayRegressor(Regressor):
     """
-    Baseline 5 : Jours similaires (Même jour de la semaine + Même mois de l'année dernière + Même température).
+    Jours similaires (Même jour de la semaine + Même mois de l'année dernière + Même température).
     """
     def __init__(self, k=4, pred_hour_local=14, temp_weight=1.0):
         self.k = k
@@ -213,26 +237,12 @@ class SimilarDayRegressor(Regressor):
         mean_temp_j = np.mean(self._normalize(compare_hours['temperature_c_pondere_pop'].values))
 
         date_j_ts = pd.to_datetime(date_j)
-        weekday = date_j_ts.dayofweek
-        month = date_j_ts.month
-        year = date_j_ts.year
 
-        history_unique_ts = pd.to_datetime(hist_dates_date.drop_duplicates())
+        recent_weeks = [(date_j_ts - pd.Timedelta(days=7 * i)).date() for i in range(1, 5)]
+        last_year_weeks = [(date_j_ts - pd.Timedelta(days=364 + 7 * i)).date() for i in range(0, 4)]
 
-        same_weekdays_dates = history_unique_ts[
-            (history_unique_ts.dt.dayofweek == weekday) &
-            (history_unique_ts.dt.year == year) &
-            (history_unique_ts.dt.month == month) &
-            (history_unique_ts.dt.date < date_j)
-        ].dt.date
-
-        same_weekdays_last_year_dates = history_unique_ts[
-            (history_unique_ts.dt.dayofweek == weekday) &
-            (history_unique_ts.dt.year == year - 1) &
-            (history_unique_ts.dt.month == month)
-        ].dt.date
-
-        candidate_dates = set(same_weekdays_dates.tolist() + same_weekdays_last_year_dates.tolist())
+        hist_unique_dates = set(hist_dates_date)
+        candidate_dates = set(recent_weeks + last_year_weeks).intersection(hist_unique_dates)
         candidates = []
 
         for d in candidate_dates:
@@ -246,6 +256,8 @@ class SimilarDayRegressor(Regressor):
 
             conso_d = self._normalize(date_d_compare['consommation_mw'].values)
             mean_temp_d = np.mean(self._normalize(date_d_compare['temperature_c_pondere_pop'].values))
+
+            if len(conso_d) != len(conso_j): continue
 
             dist_shape = np.linalg.norm(conso_j - conso_d)
             dist_temp = abs(mean_temp_j - mean_temp_d)
