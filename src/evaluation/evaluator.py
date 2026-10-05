@@ -120,8 +120,11 @@ class TimeSeriesEvaluator:
 
                 preds = model.predict(current_val_pred)
 
-                all_preds.extend(preds)
-                all_y.extend(current_val[self.target_col].values)
+                # Ne garder que les prédictions qui appartiennent réellement au set de validation
+                # (évite le mismatch de taille si les cutoffs normés capturent des bouts de df_train)
+                valid_idx = current_val_pred.index.intersection(df_val.index)
+                all_preds.extend(preds.loc[valid_idx])
+                all_y.extend(current_val.loc[valid_idx, self.target_col].values)
 
             # Affichage adaptatif
             if len(cutoffs) > 20:

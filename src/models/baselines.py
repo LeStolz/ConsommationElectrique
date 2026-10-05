@@ -8,53 +8,70 @@ def get_lagged_local_value(df_target, df_history, lag_days, col):
     """
     Récupère la valeur historique d'une colonne pour un décalage donné en jours,
     en joignant explicitement sur (date_cible - lag, heure locale).
-    - Moyenne les heures doubles.
+    - Si target et history ont tous les deux 2 heures identiques, on les fait correspondre par leur heure UTC.
+    - Sinon, on moyenne les heures doubles de l'historique.
     - Interpole les heures manquantes.
     """
     target_dates = df_target['timestamp_paris'].dt.date - pd.Timedelta(days=lag_days)
     target_hours = df_target['timestamp_paris'].dt.hour
+    target_utc_hours = pd.to_datetime(df_target['timestamp_utc']).dt.hour
 
     hist_dates = df_history['timestamp_paris'].dt.date
     hist_hours = df_history['timestamp_paris'].dt.hour
+    hist_utc_hours = pd.to_datetime(df_history['timestamp_utc']).dt.hour
 
-    lookup = pd.DataFrame({
+    hist_df = pd.DataFrame({
         'date': hist_dates,
         'hour': hist_hours,
+        'utc_hour': hist_utc_hours,
         'val': df_history[col].values
     })
 
-    # 1. Moyenne des heures doubles (Automne)
-    lookup = lookup.groupby(['date', 'hour'], as_index=False)['val'].mean()
+    # Identifier les doublons dans l'historique
+    hist_df['hist_count'] = hist_df.groupby(['date', 'hour'])['date'].transform('count')
 
-    # 2. Interpolation des heures manquantes (Printemps)
-    unique_dates = lookup['date'].unique()
-    full_index = pd.MultiIndex.from_product(
-        [unique_dates, range(24)],
-        names=['date', 'hour']
-    )
+    # 1. Lookup Exact en utilisant UTC
+    lookup_exact = hist_df.set_index(['date', 'hour', 'utc_hour'])['val']
 
-    lookup_series = lookup.set_index(['date', 'hour'])['val']
+    # 2. Lookup Moyen
+    hist_mean = hist_df.groupby(['date', 'hour'], as_index=False)['val'].mean()
+    unique_dates = hist_mean['date'].unique()
+    full_index = pd.MultiIndex.from_product([unique_dates, range(24)], names=['date', 'hour'])
+    lookup_mean = hist_mean.set_index(['date', 'hour'])['val'].reindex(full_index)
+    lookup_mean = lookup_mean \
+        .groupby(level='date') \
+        .transform(lambda s: s.interpolate(method='linear', limit_direction='both'))
 
-    # Réindexer sur toutes les heures (0 à 23) pour faire apparaitre les trous (NaN)
-    lookup_series = lookup_series.reindex(full_index)
+    target_df = pd.DataFrame({
+        'date': target_dates,
+        'hour': target_hours,
+        'utc_hour': target_utc_hours
+    })
+    target_df['target_count'] = target_df.groupby(['date', 'hour'])['date'].transform('count')
 
-    # Interpoler linéairement (comble le trou de 2h avec la moyenne de 1h et 3h)
-    lookup_series = lookup_series.interpolate(method='linear')
+    hist_counts_series = hist_df.groupby(['date', 'hour'])['hist_count'].first()
+    target_df['hist_count'] = pd.MultiIndex.from_arrays([target_df['date'], target_df['hour']]).map(hist_counts_series)
 
-    # Mapping final
-    keys = pd.MultiIndex.from_arrays([target_dates, target_hours])
-    return keys.map(lookup_series).values
+    use_exact_mask = (target_df['target_count'] == 2) & (target_df['hist_count'] == 2)
+
+    keys_mean = pd.MultiIndex.from_arrays([target_df['date'], target_df['hour']])
+    keys_exact = pd.MultiIndex.from_arrays([target_df['date'], target_df['hour'], target_df['utc_hour']])
+
+    vals_mean = keys_mean.map(lookup_mean).values
+    vals_exact = keys_exact.map(lookup_exact).values
+
+    return np.where(use_exact_mask, vals_exact, vals_mean)
 
 
-def get_latest_local_value(df, col, at_hour_local):
+def get_latest_local_value(df_target, df_history, col, at_hour_local):
     """
     Récupère la valeur de col à la même heure la veille (J-1),
     ou l'avant-veille (J-2) si on est après 'at_hour'.
     """
-    val_j1 = get_lagged_local_value(df, df, lag_days=1, col=col)
-    val_j2 = get_lagged_local_value(df, df, lag_days=2, col=col)
+    val_j1 = get_lagged_local_value(df_target, df_history, lag_days=1, col=col)
+    val_j2 = get_lagged_local_value(df_target, df_history, lag_days=2, col=col)
 
-    before_hour_mask = df['timestamp_paris'].dt.hour < at_hour_local
+    before_hour_mask = df_target['timestamp_paris'].dt.hour < at_hour_local
     return np.where(before_hour_mask, val_j1, val_j2)
 
 
@@ -90,9 +107,8 @@ class YesterdayPersistenceRegressor(Regressor):
     def predict(self, df_test):
         assert df_test['timestamp_paris'].dt.date.unique().size <= 1, "Data Leak : Prediction horizon exceeds 1 day."
         combined = pd.concat([self.history, df_test])
-        pred = get_latest_local_value(combined, 'consommation_mw', self.pred_hour_local)
-        pred_test = pred[-len(df_test):]
-        return pd.Series(pred_test, index=df_test.index)
+        pred = get_latest_local_value(df_test, combined, 'consommation_mw', self.pred_hour_local)
+        return pd.Series(pred, index=df_test.index)
 
 
 class LinearRegressor(Regressor):
@@ -138,7 +154,7 @@ class LinearRegressor(Regressor):
             combined[f'{col}_derniere_connue'] = combined['date'].map(col_cutoff)
 
         for col in lastest_known_same_hour_cols:
-            combined[f'{col}_meme_heure_derniere_connue'] = get_latest_local_value(combined, col, self.pred_hour_local)
+            combined[f'{col}_meme_heure_derniere_connue'] = get_latest_local_value(combined, combined, col, self.pred_hour_local)
 
         if history is not None:
             return combined.loc[df.index].copy()
@@ -149,13 +165,14 @@ class LinearRegressor(Regressor):
     def fit(self, df_train):
         self.history = df_train.tail(366 * 24 + 2).copy()
         df_features = self._build_features(df_train)
+        df_features = df_features.dropna(subset=self.features_cols + ['consommation_mw'])
         self.model.fit(df_features[self.features_cols], df_features['consommation_mw'])
 
 
     def predict(self, df_test):
         assert df_test['timestamp_paris'].dt.date.unique().size <= 1, "Data Leak : Prediction horizon exceeds 1 day."
         df_features = self._build_features(df_test, self.history)
-        return pd.Series(self.model.predict(df_features), index=df_test.index)
+        return pd.Series(self.model.predict(df_features[self.features_cols]), index=df_test.index)
 
 
 class SimilarDayRegressor(Regressor):
