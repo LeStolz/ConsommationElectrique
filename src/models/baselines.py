@@ -91,7 +91,8 @@ class YesterdayPersistenceRegressor(Regressor):
         assert df_test['timestamp_paris'].dt.date.unique().size <= 1, "Data Leak : Prediction horizon exceeds 1 day."
         combined = pd.concat([self.history, df_test])
         pred = get_latest_local_value(combined, 'consommation_mw', self.pred_hour_local)
-        return pd.Series(pred, index=df_test.index)
+        pred_test = pred[-len(df_test):]
+        return pd.Series(pred_test, index=df_test.index)
 
 
 class LinearRegressor(Regressor):
@@ -172,6 +173,7 @@ class SimilarDayRegressor(Regressor):
         x = np.asarray(x, dtype=float)
         mean = np.mean(x)
         std = np.std(x)
+        if std < 1e-8: return x - mean
         return (x - mean) / std
 
 
@@ -183,59 +185,60 @@ class SimilarDayRegressor(Regressor):
         assert df_test['timestamp_paris'].dt.date.unique().size <= 1, "Data Leak : Prediction horizon exceeds 1 day."
 
         date_j_plus_1 = df_test['timestamp_paris'].dt.date.iloc[0]
-        date_j = pd.to_datetime(date_j_plus_1 - pd.Timedelta(days=1))
+        date_j = (pd.to_datetime(date_j_plus_1) - pd.Timedelta(days=1)).date()
 
-        hist_dates = self.history['timestamp_paris']
-        day_j = self.history[hist_dates == date_j]
+        hist_dates_date = self.history['timestamp_paris'].dt.date
+        day_j = self.history[hist_dates_date == date_j]
 
         compare_hours = day_j[day_j['timestamp_paris'].dt.hour < self.pred_hour_local]
 
         conso_j = self._normalize(compare_hours['consommation_mw'].values)
         mean_temp_j = np.mean(self._normalize(compare_hours['temperature_c_pondere_pop'].values))
 
-        weekday = date_j.dayofweek
-        month = date_j.month
-        year = date_j.year
+        date_j_ts = pd.to_datetime(date_j)
+        weekday = date_j_ts.dayofweek
+        month = date_j_ts.month
+        year = date_j_ts.year
 
-        history_unique_dates = hist_dates.drop_duplicates()
-        same_weekdays_dates = history_unique_dates[
-            (history_unique_dates.dayofweek == weekday) &
-            (history_unique_dates.year == year) &
-            (history_unique_dates.month == month) &
-            (history_unique_dates.date < date_j.date())
-        ]
-        same_weekdays_last_year_dates = history_unique_dates[
-            (history_unique_dates.dayofweek == weekday) &
-            (history_unique_dates.year == year - 1) &
-            (history_unique_dates.month == month)
-        ]
+        history_unique_ts = pd.to_datetime(hist_dates_date.drop_duplicates())
+
+        same_weekdays_dates = history_unique_ts[
+            (history_unique_ts.dt.dayofweek == weekday) &
+            (history_unique_ts.dt.year == year) &
+            (history_unique_ts.dt.month == month) &
+            (history_unique_ts.dt.date < date_j)
+        ].dt.date
+
+        same_weekdays_last_year_dates = history_unique_ts[
+            (history_unique_ts.dt.dayofweek == weekday) &
+            (history_unique_ts.dt.year == year - 1) &
+            (history_unique_ts.dt.month == month)
+        ].dt.date
 
         candidate_dates = set(same_weekdays_dates.tolist() + same_weekdays_last_year_dates.tolist())
         candidates = []
 
         for d in candidate_dates:
-            date_d = pd.Timestamp(d)
-            d_morning = self.history[
-                (hist_dates == date_d) &
+            date_d_compare = self.history[
+                (hist_dates_date == d) &
                 (self.history['timestamp_paris'].dt.hour < self.pred_hour_local)
             ]
-            d_plus_1 = self.history[hist_dates == date_d + pd.Timedelta(days=1)]
 
-            if len(d_morning) == self.pred_hour_local and len(d_plus_1) > 0:
-                if not d_morning['consommation_mw'].isna().any() and not d_plus_1['consommation_mw'].isna().any():
-                    conso_c = d_morning['consommation_mw'].values
-                    temp_c = d_morning['temperature_c_pondere_pop'].values
-                    mean_temp_c = np.mean(temp_c)
+            date_d_plus_1_date = (pd.to_datetime(d) + pd.Timedelta(days=1)).date()
+            date_d_plus_1 = self.history[hist_dates_date == date_d_plus_1_date]
 
-                    dist_shape = np.linalg.norm(conso_j - conso_c)
-                    dist_temp = abs(mean_temp_j - mean_temp_c)
-                    total_dist = dist_shape + (self.temp_weight * dist_temp)
+            conso_d = self._normalize(date_d_compare['consommation_mw'].values)
+            mean_temp_d = np.mean(self._normalize(date_d_compare['temperature_c_pondere_pop'].values))
 
-                    pred_series = d_plus_1.groupby(d_plus_1['timestamp_paris'].dt.hour)['consommation_mw'].mean()
-                    candidates.append({
-                        'distance': total_dist,
-                        'prediction': pred_series
-                    })
+            dist_shape = np.linalg.norm(conso_j - conso_d)
+            dist_temp = abs(mean_temp_j - mean_temp_d)
+            total_dist = dist_shape + (self.temp_weight * dist_temp)
+
+            pred_series = date_d_plus_1.groupby(date_d_plus_1['timestamp_paris'].dt.hour)['consommation_mw'].mean()
+            candidates.append({
+                'distance': total_dist,
+                'prediction': pred_series
+            })
 
         candidates.sort(key=lambda x: x['distance'])
         top_k = candidates[:self.k]
@@ -245,11 +248,11 @@ class SimilarDayRegressor(Regressor):
         weights /= weights.sum()
 
         final_prediction = np.zeros(len(df_test))
-        for idx, hr in enumerate(df_test['timestamp_paris'].dt.hour):
+        for target_index, hour in enumerate(df_test['timestamp_paris'].dt.hour):
             val = 0
-            for i, c in enumerate(top_k):
-                pred_val = c['prediction'].get(hr, c['prediction'].mean())
-                val += pred_val * weights[i]
-            final_prediction[idx] = val
+            for c_index, c in enumerate(top_k):
+                pred_val = c['prediction'].get(hour, c['prediction'].mean())
+                val += pred_val * weights[c_index]
+            final_prediction[target_index] = val
 
         return pd.Series(final_prediction, index=df_test.index)

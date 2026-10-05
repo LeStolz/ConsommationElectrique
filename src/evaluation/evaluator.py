@@ -71,8 +71,9 @@ class TimeSeriesEvaluator:
         model_name = model.__class__.__name__
 
         df_combined = pd.concat([df_train, df_val]).sort_values(self.date_col)
-        start = df_val[self.date_col].min()
-        end = df_val[self.date_col].max() + pd.Timedelta(hours=1)
+        # Alignement strict sur les journées calendaires locales (Minuit à Minuit)
+        start = df_val[self.date_col].dt.normalize().min()
+        end = df_val[self.date_col].dt.normalize().max() + pd.Timedelta(days=1)
 
         # Génération des dates de coupure (cutoffs) avec l'intervalle en heures
         cutoffs = pd.date_range(start=start, end=end, freq=f'{step_size_days}D')
