@@ -1,14 +1,61 @@
-﻿from .regressor import Regressor
+from .regressor import Regressor
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
 
 
-def get_latest_known_value(df, of_col, at_hour):
-    df[f'{of_col}_moins_1'] = df[of_col].shift(24)
-    df[f'{of_col}_moins_2'] = df[of_col].shift(48)
-    before_hour_mask = df['timestamp_utc'].dt.hour < at_hour
-    return np.where(before_hour_mask, df[f'{of_col}_moins_1'], df[f'{of_col}_moins_2'])
+def get_lagged_local_value(df_target, df_history, lag_days, col):
+    """
+    Récupère la valeur historique d'une colonne pour un décalage donné en jours,
+    en joignant explicitement sur (date_cible - lag, heure locale).
+    - Moyenne les heures doubles.
+    - Interpole les heures manquantes.
+    """
+    target_dates = df_target['timestamp_paris'].dt.date - pd.Timedelta(days=lag_days)
+    target_hours = df_target['timestamp_paris'].dt.hour
+
+    hist_dates = df_history['timestamp_paris'].dt.date
+    hist_hours = df_history['timestamp_paris'].dt.hour
+
+    lookup = pd.DataFrame({
+        'date': hist_dates,
+        'hour': hist_hours,
+        'val': df_history[col].values
+    })
+
+    # 1. Moyenne des heures doubles (Automne)
+    lookup = lookup.groupby(['date', 'hour'], as_index=False)['val'].mean()
+
+    # 2. Interpolation des heures manquantes (Printemps)
+    unique_dates = lookup['date'].unique()
+    full_index = pd.MultiIndex.from_product(
+        [unique_dates, range(24)],
+        names=['date', 'hour']
+    )
+
+    lookup_series = lookup.set_index(['date', 'hour'])['val']
+
+    # Réindexer sur toutes les heures (0 à 23) pour faire apparaitre les trous (NaN)
+    lookup_series = lookup_series.reindex(full_index)
+
+    # Interpoler linéairement (comble le trou de 2h avec la moyenne de 1h et 3h)
+    lookup_series = lookup_series.interpolate(method='linear')
+
+    # Mapping final
+    keys = pd.MultiIndex.from_arrays([target_dates, target_hours])
+    return keys.map(lookup_series).values
+
+
+def get_latest_local_value(df, col, at_hour_local):
+    """
+    Récupère la valeur de col à la même heure la veille (J-1),
+    ou l'avant-veille (J-2) si on est après 'at_hour'.
+    """
+    val_j1 = get_lagged_local_value(df, df, lag_days=1, col=col)
+    val_j2 = get_lagged_local_value(df, df, lag_days=2, col=col)
+
+    before_hour_mask = df['timestamp_paris'].dt.hour < at_hour_local
+    return np.where(before_hour_mask, val_j1, val_j2)
 
 
 class LastWeekPersistenceRegressor(Regressor):
@@ -17,14 +64,14 @@ class LastWeekPersistenceRegressor(Regressor):
     identique à celle du même jour de la semaine dernière (J-7).
     """
     def fit(self, df_train):
-        self.history = df_train.tail(366 * 24).copy()
+        self.history = df_train.tail(7 * 24 + 1).copy()
 
 
     def predict(self, df_test):
-        assert len(df_test) <= 7 * 24, "Data Leak : Prediction horizon exceeds 7 days."
+        assert df_test['timestamp_paris'].dt.date.unique().size <= 7, "Data Leak : Prediction horizon exceeds 7 days."
         combined = pd.concat([self.history, df_test])
-        combined['pred'] = combined['consommation_mw'].shift(7 * 24)
-        return combined.loc[df_test.index, 'pred']
+        pred = get_lagged_local_value(df_test, combined, lag_days=7, col='consommation_mw')
+        return pd.Series(pred, index=df_test.index)
 
 
 class YesterdayPersistenceRegressor(Regressor):
@@ -32,31 +79,28 @@ class YesterdayPersistenceRegressor(Regressor):
     Baseline 2 : Prédit la consommation de la veille SI elle est connue à 14h,
     sinon se rabat sur l'avant-veille.
     """
-    def __init__(self, hour_of_prediction=14):
-        self.hour_of_prediction = hour_of_prediction
+    def __init__(self, pred_hour_local=14):
+        self.pred_hour_local = pred_hour_local
 
 
     def fit(self, df_train):
-        self.history = df_train.tail(2 * 24).copy()
+        self.history = df_train.tail(2 * 24 + 1).copy()
 
 
     def predict(self, df_test):
-        assert len(df_test) <= 24, "Data Leak : Prediction horizon exceeds 24h."
+        assert df_test['timestamp_paris'].dt.date.unique().size <= 1, "Data Leak : Prediction horizon exceeds 1 day."
         combined = pd.concat([self.history, df_test])
-        combined['consommation_mw_meme_heure_derniere_connue'] = \
-            get_latest_known_value(combined, 'consommation_mw', self.hour_of_prediction)
-
-        return combined.loc[df_test.index, 'consommation_mw_meme_heure_derniere_connue']
+        pred = get_latest_local_value(combined, 'consommation_mw', self.pred_hour_local)
+        return pd.Series(pred, index=df_test.index)
 
 
 class LinearRegressor(Regressor):
     """
-    Baseline 3 : Régression linéaire simple utilisant le calendrier et la météo,
-    et calculant ses propres Lags.
+    Baseline 3 : Régression linéaire simple utilisant le calendrier et la météo.
     """
-    def __init__(self, hour_of_prediction=14, features_cols=[]):
-        self.model = LinearRegression()
-        self.hour_of_prediction = hour_of_prediction
+    def __init__(self, pred_hour_local=14, model=LinearRegression, features_cols=[]):
+        self.model = model()
+        self.pred_hour_local = pred_hour_local
         self.features_cols = features_cols
 
 
@@ -79,21 +123,21 @@ class LinearRegressor(Regressor):
             for col in self.features_cols if '_meme_heure_derniere_connue' in col
         ]
 
-        combined['date'] = combined['timestamp_utc'].dt.normalize()
+        combined['date'] = combined['timestamp_paris'].dt.date
         cutoff = combined.loc[
-            combined['timestamp_utc'].dt.hour == self.hour_of_prediction, ['date'] + lastest_known_cols
-        ].drop_duplicates(subset='date').copy()
-        cutoff['date'] += pd.DateOffset(days=1)
+            combined['timestamp_paris'].dt.hour == self.pred_hour_local - 1, ['date'] + lastest_known_cols
+        ].copy()
+        cutoff['date'] = (pd.to_datetime(cutoff['date']) + pd.Timedelta(days=1)).dt.date
 
         for col, lag in last_cols:
-            combined[f'{col}_moins_{lag}'] = combined[col].shift(lag * 24)
+            combined[f'{col}_moins_{lag}'] = get_lagged_local_value(combined, combined, lag_days=lag, col=col)
 
         for col in lastest_known_cols:
             col_cutoff = cutoff.set_index('date')[col]
             combined[f'{col}_derniere_connue'] = combined['date'].map(col_cutoff)
 
         for col in lastest_known_same_hour_cols:
-            combined[f'{col}_meme_heure_derniere_connue'] = get_latest_known_value(combined, col, self.hour_of_prediction)
+            combined[f'{col}_meme_heure_derniere_connue'] = get_latest_local_value(combined, col, self.pred_hour_local)
 
         if history is not None:
             return combined.loc[df.index].copy()
@@ -102,103 +146,110 @@ class LinearRegressor(Regressor):
 
 
     def fit(self, df_train):
-        # Conserve les 366 derniers jours du train set pour construire les features du test set
-        self.history = df_train.tail(366 * 24).copy()
-
+        self.history = df_train.tail(366 * 24 + 2).copy()
         df_features = self._build_features(df_train)
-
-        # Supprime les NaNs initiaux (les 7 premiers jours du dataset n'ont pas de J-7)
-        df_features = df_features.dropna(subset=self.features_cols + ['consommation_mw'])
-
         self.model.fit(df_features[self.features_cols], df_features['consommation_mw'])
 
 
     def predict(self, df_test):
-        assert len(df_test) <= 24, "Data Leak : Prediction horizon exceeds 24h."
-        # Construit les features du Test en utilisant l'historique pour combler les trous
+        assert df_test['timestamp_paris'].dt.date.unique().size <= 1, "Data Leak : Prediction horizon exceeds 1 day."
         df_features = self._build_features(df_test, self.history)
-        return self.model.predict(df_features[self.features_cols])
+        return pd.Series(self.model.predict(df_features), index=df_test.index)
 
 
 class SimilarDayRegressor(Regressor):
     """
-    Baseline 5 : Jour similaire (`n_candidates` même jour de la semaine + même mois l'année dernière + température).
+    Baseline 5 : Jours similaires (Même jour de la semaine + Même mois de l'année dernière + Même température).
     """
-    def __init__(self, k=4, hour_of_prediction=14, temp_weight=1.0):
+    def __init__(self, k=4, pred_hour_local=14, temp_weight=1.0):
         self.k = k
-        self.hour_of_prediction = hour_of_prediction
+        self.pred_hour_local = pred_hour_local
         self.temp_weight = temp_weight
 
 
-    def _normalize(self, series):
-        return (series - series.mean()) / series.std()
+    @staticmethod
+    def _normalize(x):
+        x = np.asarray(x, dtype=float)
+        mean = np.mean(x)
+        std = np.std(x)
+        return (x - mean) / std
 
 
     def fit(self, df_train):
-        self.history = df_train.tail(2 * 366 * 24).copy()
+        self.history = df_train.tail(366 * 24 + 2).copy()
 
 
     def predict(self, df_test):
-        assert len(df_test) <= 24, "Data Leak : Prediction horizon exceeds 24h."
+        assert df_test['timestamp_paris'].dt.date.unique().size <= 1, "Data Leak : Prediction horizon exceeds 1 day."
 
-        date_j_plus_1 = df_test['timestamp_utc'].dt.normalize().iloc[0]
-        date_j = date_j_plus_1 - pd.Timedelta(days=1)
-        day_j = self.history[self.history['timestamp_utc'].dt.normalize() == date_j]
+        date_j_plus_1 = df_test['timestamp_paris'].dt.date.iloc[0]
+        date_j = pd.to_datetime(date_j_plus_1 - pd.Timedelta(days=1))
 
-        day_j_before_pred = day_j[day_j['timestamp_utc'].dt.hour < self.hour_of_prediction]
-        conso_j = self._normalize(day_j_before_pred['consommation_mw'].values)
-        mean_temp_j = self._normalize(day_j_before_pred['temperature_c_pondere_pop']).mean()
+        hist_dates = self.history['timestamp_paris']
+        day_j = self.history[hist_dates == date_j]
+
+        compare_hours = day_j[day_j['timestamp_paris'].dt.hour < self.pred_hour_local]
+
+        conso_j = self._normalize(compare_hours['consommation_mw'].values)
+        mean_temp_j = np.mean(self._normalize(compare_hours['temperature_c_pondere_pop'].values))
 
         weekday = date_j.dayofweek
         month = date_j.month
         year = date_j.year
 
-        history_dates = self.history['timestamp_utc'].dt.normalize().drop_duplicates()
-        same_weekday_dates = history_dates[
-            (history_dates.dt.dayofweek == weekday) &
-            (history_dates.dt.year == year) &
-            (history_dates.dt.month == month) &
-            (history_dates.dt.date < date_j.date())
-        ].tolist()
-        same_weekdays_last_year_dates = history_dates[
-            (history_dates.dt.dayofweek == weekday) &
-            (history_dates.dt.year == year - 1) &
-            (history_dates.dt.month == month)
-        ].tolist()
+        history_unique_dates = hist_dates.drop_duplicates()
+        same_weekdays_dates = history_unique_dates[
+            (history_unique_dates.dayofweek == weekday) &
+            (history_unique_dates.year == year) &
+            (history_unique_dates.month == month) &
+            (history_unique_dates.date < date_j.date())
+        ]
+        same_weekdays_last_year_dates = history_unique_dates[
+            (history_unique_dates.dayofweek == weekday) &
+            (history_unique_dates.year == year - 1) &
+            (history_unique_dates.month == month)
+        ]
 
-        candidate_dates = set(same_weekday_dates + same_weekdays_last_year_dates)
+        candidate_dates = set(same_weekdays_dates.tolist() + same_weekdays_last_year_dates.tolist())
         candidates = []
 
         for d in candidate_dates:
-            d_before_pred = self.history[
-                (self.history['timestamp_utc'].dt.normalize() == d) &
-                (self.history['timestamp_utc'].dt.hour < self.hour_of_prediction)
+            date_d = pd.Timestamp(d)
+            d_morning = self.history[
+                (hist_dates == date_d) &
+                (self.history['timestamp_paris'].dt.hour < self.pred_hour_local)
             ]
-            d_plus_1 = self.history[
-                self.history['timestamp_utc'].dt.normalize() == d + pd.Timedelta(days=1)
-            ]
+            d_plus_1 = self.history[hist_dates == date_d + pd.Timedelta(days=1)]
 
-            conso_d = self._normalize(d_before_pred['consommation_mw'].values)
-            mean_temp_d = self._normalize(d_before_pred['temperature_c_pondere_pop']).mean()
+            if len(d_morning) == self.pred_hour_local and len(d_plus_1) > 0:
+                if not d_morning['consommation_mw'].isna().any() and not d_plus_1['consommation_mw'].isna().any():
+                    conso_c = d_morning['consommation_mw'].values
+                    temp_c = d_morning['temperature_c_pondere_pop'].values
+                    mean_temp_c = np.mean(temp_c)
 
-            dist_shape = np.linalg.norm(conso_d - conso_j)
-            dist_temp = abs(mean_temp_j - mean_temp_d)
-            total_dist = dist_shape + (self.temp_weight * dist_temp)
+                    dist_shape = np.linalg.norm(conso_j - conso_c)
+                    dist_temp = abs(mean_temp_j - mean_temp_c)
+                    total_dist = dist_shape + (self.temp_weight * dist_temp)
 
-            candidates.append({
-                'distance': total_dist,
-                'prediction': d_plus_1['consommation_mw'].values
-            })
+                    pred_series = d_plus_1.groupby(d_plus_1['timestamp_paris'].dt.hour)['consommation_mw'].mean()
+                    candidates.append({
+                        'distance': total_dist,
+                        'prediction': pred_series
+                    })
 
         candidates.sort(key=lambda x: x['distance'])
         top_k = candidates[:self.k]
-
         distances = np.array([c['distance'] for c in top_k])
-        profiles = np.stack([c['prediction'] for c in top_k])
 
         weights = 1.0 / (distances + 1e-8)
         weights /= weights.sum()
 
-        final_prediction = np.average(profiles, axis=0, weights=weights)
+        final_prediction = np.zeros(len(df_test))
+        for idx, hr in enumerate(df_test['timestamp_paris'].dt.hour):
+            val = 0
+            for i, c in enumerate(top_k):
+                pred_val = c['prediction'].get(hr, c['prediction'].mean())
+                val += pred_val * weights[i]
+            final_prediction[idx] = val
 
         return pd.Series(final_prediction, index=df_test.index)

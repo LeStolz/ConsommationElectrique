@@ -9,7 +9,7 @@ class TimeSeriesEvaluator:
     Classe universelle pour évaluer les modèles de prévision temporelle.
     Gère le découpage chronologique, l'entraînement, l'inférence et le calcul des métriques.
     """
-    def __init__(self, df, target_col='consommation_mw', date_col='timestamp_utc'):
+    def __init__(self, df, target_col='consommation_mw', date_col='timestamp_paris'):
         self.df = df.sort_values(date_col).copy()
         self.target_col = target_col
         self.date_col = date_col
@@ -100,7 +100,7 @@ class TimeSeriesEvaluator:
             # on censure (remplace par NaN) toutes les données du jour J après 14h.
             if not current_train.empty:
                 last_date = current_train[self.date_col].dt.date.max()
-                mask_leak = (current_train[self.date_col].dt.date == last_date) & (current_train[self.date_col].dt.hour > 14)
+                mask_leak = (current_train[self.date_col].dt.date == last_date) & (current_train[self.date_col].dt.hour >= 14)
 
                 # On ne masque que les colonnes de type float (consommation, température, vent, etc.)
                 # Les variables booléennes ou entières (calendrier, férié) restent connues à 14h !
