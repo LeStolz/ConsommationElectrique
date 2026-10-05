@@ -7,3 +7,4 @@ jupyter
 openpyxl
 requests
 holidays
+xgboost
