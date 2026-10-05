@@ -240,12 +240,6 @@ Météo comment ?
 	- Météo J (mais après 14h comment ?)
 	- Météo J-1
 
-
-
-	- Prophet
-	- ATTENTION LE METEO est interpole, alors, attention au fuit de données
-	- ATTENTION TEMPERATURE est interpole
-
 Rapport discussion
 
 Le protocole opérationnel doit respecter strictement l’information qui serait réellement disponible à 14 h le jour J.

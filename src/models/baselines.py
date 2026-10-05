@@ -1,4 +1,4 @@
-from .regressor import Regressor
+﻿from .regressor import Regressor
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
@@ -233,7 +233,12 @@ class SimilarDayRegressor(Regressor):
 
         compare_hours = day_j[day_j['timestamp_paris'].dt.hour < self.pred_hour_local]
 
-        conso_j = self._normalize(compare_hours['consommation_mw'].values)
+        # Aligner strictement sur pred_hour_local heures pour gérer les jours de changement d'heure
+        s_j = compare_hours.set_index(compare_hours['timestamp_paris'].dt.hour)['consommation_mw']
+        s_j = s_j.groupby(s_j.index).mean().reindex(range(self.pred_hour_local)) \
+            .interpolate(method='linear', limit_direction='both')
+
+        conso_j = self._normalize(s_j.values)
         mean_temp_j = np.mean(self._normalize(compare_hours['temperature_c_pondere_pop'].values))
 
         date_j_ts = pd.to_datetime(date_j)
@@ -254,10 +259,12 @@ class SimilarDayRegressor(Regressor):
             date_d_plus_1_date = (pd.to_datetime(d) + pd.Timedelta(days=1)).date()
             date_d_plus_1 = self.history[hist_dates_date == date_d_plus_1_date]
 
-            conso_d = self._normalize(date_d_compare['consommation_mw'].values)
-            mean_temp_d = np.mean(self._normalize(date_d_compare['temperature_c_pondere_pop'].values))
+            s_d = date_d_compare.set_index(date_d_compare['timestamp_paris'].dt.hour)['consommation_mw']
+            s_d = s_d.groupby(s_d.index).mean().reindex(range(self.pred_hour_local)) \
+                .interpolate(method='linear', limit_direction='both')
 
-            if len(conso_d) != len(conso_j): continue
+            conso_d = self._normalize(s_d.values)
+            mean_temp_d = np.mean(self._normalize(date_d_compare['temperature_c_pondere_pop'].values))
 
             dist_shape = np.linalg.norm(conso_j - conso_d)
             dist_temp = abs(mean_temp_j - mean_temp_d)

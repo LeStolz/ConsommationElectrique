@@ -8,3 +8,4 @@ openpyxl
 requests
 holidays
 xgboost
+prophet
