@@ -213,7 +213,33 @@ class TimeSeriesEvaluator:
 
         table = pd.DataFrame(lignes)
         table = table.dropna(subset=self.features_cols)
+        
+        # Vérification de sécurité automatique
+        self.verify_features(table)
+        
         return table
+
+    def verify_features(self, table):
+        """Quelques contrôles de bon sens lancés après la construction de la table."""
+        n_lignes = len(table)
+        n_jours = table["date_prevision"].nunique()
+        cible_manquante = int(table["cible_consommation_mw"].isna().sum())
+        
+        print("\n=== Vérification de la table de features ===")
+        print(f"Lignes totales : {n_lignes}")
+        print(f"Jours de prévision uniques : {n_jours}")
+        print(f"Cibles manquantes : {cible_manquante}")
+        
+        par_jour = table.groupby("date_prevision").size()
+        jours_anormaux = par_jour[~par_jour.isin([23, 24, 25])]
+        
+        if not jours_anormaux.empty:
+            print("\nATTENTION : Jours avec un nombre d'horizons anormal (!= 23, 24, 25) :")
+            print(jours_anormaux)
+        else:
+            print("Aucune anomalie d'horizons détectée (tous les jours ont 23, 24 ou 25 heures).")
+            
+        print("============================================\n")
 
 
     def split_data(self, val_start, test_start):
