@@ -1,7 +1,7 @@
 ﻿import pandas as pd
 import numpy as np
 from prophet import Prophet
-from .regressor import Regressor
+from .utils import Regressor
 
 class ProphetRegressor(Regressor):
     """
@@ -21,14 +21,14 @@ class ProphetRegressor(Regressor):
 
     def fit(self, df_train):
         if self.history_days is not None:
-            cutoff_date = df_train['timestamp_paris'].max() - pd.Timedelta(days=self.history_days)
-            df_fit = df_train[df_train['timestamp_paris'] >= cutoff_date].copy()
+            cutoff_date = df_train['timestamp_cible_paris'].max() - pd.Timedelta(days=self.history_days)
+            df_fit = df_train[df_train['timestamp_cible_paris'] >= cutoff_date].copy()
         else:
             df_fit = df_train.copy()
 
         df_prophet = pd.DataFrame({
-            'ds': df_fit['timestamp_paris'].dt.tz_localize(None),
-            'y': df_fit['consommation_mw']
+            'ds': df_fit['timestamp_cible_paris'].dt.tz_localize(None),
+            'y': df_fit['cible_consommation_mw']
         })
 
         for feature in self.features_cols:
@@ -46,7 +46,7 @@ class ProphetRegressor(Regressor):
 
     def predict(self, df_test):
         df_future = pd.DataFrame({
-            'ds': df_test['timestamp_paris'].dt.tz_localize(None)
+            'ds': df_test['timestamp_cible_paris'].dt.tz_localize(None)
         })
 
         for feature in self.features_cols:
