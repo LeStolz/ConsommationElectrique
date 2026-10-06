@@ -30,7 +30,8 @@ import pandas as pd
 from pathlib import Path
 
 
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
+# Fichier dans src/models/xgboost/ -> parents[3] = racine du projet
+BASE_DIR = Path(__file__).resolve().parents[3]
 PROCESSED_DIR = BASE_DIR / "data" / "processed"
 
 HEURE_COUPURE = 14  # 14h heure de Paris : moment où on lance la prévision
@@ -264,6 +265,15 @@ def predire_jour_suivant(df, modele, colonnes_features, jour_j, scenario="realis
     existent déjà dans df -- seule l'historique jusqu'à 14h le jour_j est
     nécessaire."""
 
+    if scenario != "realiste":
+        raise ValueError("predire_jour_suivant ne gère que le scénario 'realiste' "
+                         "(la météo de J+1 n'est pas connue à 14h).")
+
+    jour_j = pd.Timestamp(jour_j)
+    if jour_j.tzinfo is None:
+        jour_j = jour_j.tz_localize("Europe/Paris")
+    jour_j = jour_j.normalize()
+
     df = construire_lags_conso(df)
 
     df_index = df.set_index(
@@ -319,10 +329,20 @@ def predire_jour_suivant(df, modele, colonnes_features, jour_j, scenario="realis
             "mois": ts.month,
             "saison": "Hiver" if ts.month in (12, 1, 2) else "Printemps" if ts.month in (3, 4, 5) else "Été" if ts.month in (6, 7, 8) else "Automne",
             "weekend": int(ts.dayofweek >= 5),
-            "ferie": 0,       # à compléter via un vrai calendrier de jours fériés si tu en as un
-            "vacances": 0,    # idem, calendrier de vacances scolaires
+            "ferie": 0,
+            "vacances": 0,
             "confinement_numero": 0,
         }
+
+        # Calendrier (férié/vacances) : repris du dataset si la ligne
+        # cible existe déjà (backtest) ; sinon 0 par défaut -> pour un vrai
+        # futur, brancher un calendrier de fériés/vacances.
+        if (ts.normalize(), horizon_h) in df_index.index:
+            l_cal = df_index.loc[(ts.normalize(), horizon_h)]
+            if isinstance(l_cal, pd.DataFrame):
+                l_cal = l_cal.iloc[0]
+            for c in ("ferie", "vacances"):
+                ligne[c] = int(l_cal[c]) if pd.notna(l_cal[c]) else 0
 
         for col in COLONNES_METEO:
             ligne[f"meteo_realiste_{col}"] = ligne_coupure[col]
@@ -352,53 +372,8 @@ def predire_jour_suivant(df, modele, colonnes_features, jour_j, scenario="realis
         "horizon_h": table["horizon_h"],
         "consommation_predite_mw": predictions,
     }).reset_index(drop=True)
-    """Prédit les 24 (23 ou 25) valeurs horaires de consommation du jour
-    jour_j + 1, à partir des données connues jusqu'à 14h le jour jour_j.
 
-    df : le DataFrame complet (sortie de charger_dataset_final()), qui doit
-         contenir l'historique jusqu'à au moins jour_j 14h (pour les lags
-         J-1, J-7, J-365 etc.) -- les heures de jour_j+1 n'ont PAS besoin
-         d'exister dans df (c'est justement ce qu'on prédit).
-    jour_j : pd.Timestamp normalisé (minuit, heure Paris) du jour de
-             prévision, ex. pd.Timestamp("2026-09-30", tz="Europe/Paris").
-    """
 
-    # On réutilise construire_table_horizons telle quelle -- elle boucle sur
-    # tous les jours possibles, mais ça reste rapide (quelques secondes) et
-    # ça garantit zéro divergence avec la logique d'entraînement.
-    table = construire_table_horizons(df, scenario=scenario)
-
-    ligne_jour = table[table["date_prevision"] == jour_j].copy()
-
-    if len(ligne_jour) == 0:
-        raise ValueError(
-            f"Aucune ligne pour {jour_j} -- vérifie que df contient bien "
-            f"une ligne (jour_j, 14h) et qu'il n'y a pas déjà des heures "
-            f"de jour_j+1 dans df qui faussent heures_j_plus_1."
-        )
-
-    # Encodage identique à l'entraînement : one-hot sur 'saison', avec les
-    # mêmes colonnes que colonnes_features (on complète celles qui manquent
-    # avec False, comme encoder_categorielles le fait pour val/test).
-    ligne_jour = pd.get_dummies(ligne_jour, columns=["saison"])
-    for col in colonnes_features:
-        if col.startswith("saison_") and col not in ligne_jour.columns:
-            ligne_jour[col] = False
-
-    X = ligne_jour[colonnes_features].copy()
-    for col in X.columns:
-        if X[col].dtype == bool:
-            X[col] = X[col].astype(int)
-
-    predictions = modele.predict(X)
-
-    resultat = pd.DataFrame({
-        "timestamp_cible_paris": ligne_jour["timestamp_cible_paris"].values,
-        "horizon_h": ligne_jour["horizon_h"].values,
-        "consommation_predite_mw": predictions,
-    }).sort_values("horizon_h").reset_index(drop=True)
-
-    return resultat
 # ============================================================
 # VÉRIFICATIONS DE SÉCURITÉ (pas de fuite, pas de ligne incomplète)
 # ============================================================

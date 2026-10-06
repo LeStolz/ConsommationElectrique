@@ -17,7 +17,8 @@ import xgboost as xgb
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
+# Fichier dans src/models/xgboost/ -> parents[3] = racine du projet
+BASE_DIR = Path(__file__).resolve().parents[3]
 PROCESSED_DIR = BASE_DIR / "data" / "processed"
 
 COLONNE_CIBLE = "cible_consommation_mw"
@@ -37,11 +38,11 @@ COLONNES_CATEGORIELLES = ["saison"]
 # CHARGEMENT DES SPLITS DÉJÀ CONSTRUITS
 # ============================================================
 
-def charger_splits(dossier=None):
+def charger_splits(dossier=None, scenario="parfait"):
     dossier = dossier or PROCESSED_DIR
-    train = pd.read_csv(dossier / "features_xgboost_parfait_train.csv")
-    val = pd.read_csv(dossier / "features_xgboost_parfait_val.csv")
-    test = pd.read_csv(dossier / "features_xgboost_parfait_test.csv")
+    train = pd.read_csv(dossier / f"features_xgboost_{scenario}_train.csv")
+    val = pd.read_csv(dossier / f"features_xgboost_{scenario}_val.csv")
+    test = pd.read_csv(dossier / f"features_xgboost_{scenario}_test.csv")
     return train, val, test
 
 
