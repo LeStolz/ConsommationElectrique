@@ -11,7 +11,7 @@ def get_lagged_local_value(df_target, df_history, lag_days, col):
     - Sinon, on moyenne les heures doubles de l'historique.
     - Interpole les heures manquantes.
     """
-    target_dates = df_target['timestamp_paris'].dt.date - pd.Timedelta(days=lag_days)
+    target_dates = df_target['timestamp_paris'].dt.date - pd.DateOffset(days=lag_days)
     target_hours = df_target['timestamp_paris'].dt.hour
     target_utc_hours = df_target['timestamp_utc'].dt.hour
 
@@ -94,3 +94,9 @@ class Regressor(ABC):
         Doit retourner une Pandas Series ou un array de la même taille que df_test.
         """
         pass
+
+    def get_feature_importances(self) -> pd.DataFrame | None:
+        """
+        Retourne un DataFrame trié de l'importance des features, ou None si non supporté.
+        """
+        return None

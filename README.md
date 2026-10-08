@@ -143,6 +143,40 @@ Heures concernées par l'étape 3 (trous > 3h sur les 13 stations simultanément
 - [ ] Analyser les structures temporelles : cycles horaires, hebdomadaires, saisonnalité annuelle, impact météo, effets calendaires et ruptures (changements d'heure, Covid).
 
 ### Modèlisation
+
+Our models will use direct inference because recursive inference is a bit hard with the first prediction (hour 0) having no previous hour to use for it (it only has J-1 14h and 0h) unlike others (which has J-1 14h, hh and h-1h) which complicate things.
+
+However, for direct inference, we will be using only 1 model to learn the entire 24 hours as the time of training is very long and also because there are correlations between hours, 1 model might be able to learn that correlation.
+many params.
+
+Models will be retrained every month because consumption pattern do not change that quickly and some models take very long to train. Within that month, the models don't need to use recursive because we get the real values right away.
+
+Uncertainty?
+On vous donne une série, son ACF/PACF, deux modèles estimés et leurs résidus.
+1 La série semble-t-elle stationnaire ? Pourquoi ?
+2 Quelle transformation proposeriez-vous si nécessaire ?
+3 Quel mécanisme AR/MA/ARMA est plausible ?
+4 Quel modèle retenez-vous après estimation ?
+5 Les résidus permettent-ils de valider provisoirement ce choix ?
+
+AIC/BIC
+stability in time?
+cost?
+
+interface
+utc
+document
+
+SARIMAX => modifié/limites, stationarity, diff + diff saison, correction saison ? transformation ? justifier avec ACF, PACF <-> candidats, plot residues, ACF residues, Ljung–Box.
+
+XGBoost => Bon
+- Feature engineering C[J], C[J-7], C[J-365], C[J-366], T[J], T[J-7],...
+- Unstable, overfit?
+- Intepretable
+LSTM => Bon, T[J, <=14h], T[J-1], T[J-7], T[J-365], T[J-366]
+
+Prophet par Meta
+Regression => Linear / Fourier.
 4. Modèles de référence (justifier) :
 	- $\hat{C}_{J+1,h} = C_{J,h}$
 	- $\hat{C}_{J+1,h} = C_{J-6/7,h}$

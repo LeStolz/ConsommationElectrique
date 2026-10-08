@@ -41,8 +41,8 @@ def zoom_periode(conso_jour, nom, debut, fin):
   
     debut = pd.Timestamp(debut, tz="Europe/Paris")
     fin = pd.Timestamp(fin, tz="Europe/Paris")
-    fenetre_debut = debut - pd.Timedelta(days=MARGE_JOURS)
-    fenetre_fin = fin + pd.Timedelta(days=MARGE_JOURS)
+    fenetre_debut = debut - pd.DateOffset(days=MARGE_JOURS)
+    fenetre_fin = fin + pd.DateOffset(days=MARGE_JOURS)
 
     serie = conso_jour.loc[fenetre_debut:fenetre_fin]
 
@@ -62,9 +62,9 @@ def zoom_periode(conso_jour, nom, debut, fin):
     plt.close(fig)
     print(f"  → {chemin_fig}")
 
-    avant = conso_jour.loc[fenetre_debut:debut - pd.Timedelta(days=1)].mean()
+    avant = conso_jour.loc[fenetre_debut:debut - pd.DateOffset(days=1)].mean()
     pendant = conso_jour.loc[debut:fin].mean()
-    apres = conso_jour.loc[fin + pd.Timedelta(days=1):fenetre_fin].mean()
+    apres = conso_jour.loc[fin + pd.DateOffset(days=1):fenetre_fin].mean()
     print(f"    Moyenne avant  : {avant:,.0f} MW")
     print(f"    Moyenne pendant: {pendant:,.0f} MW  ({(pendant/avant - 1)*100:+.1f}% vs avant)")
     print(f"    Moyenne après  : {apres:,.0f} MW")

@@ -42,10 +42,10 @@ from src.models.utils import Regressor
 
 COLONNE_CIBLE = "cible_consommation_mw"
 COLONNES_NON_FEATURES = [
-    "date_prevision", "timestamp_cible_paris", "timestamp_cible_utc",
+    "prevision_date", "cible_timestamp_paris", "cible_timestamp_utc",
     COLONNE_CIBLE,
 ]
-COLONNES_CATEGORIELLES = ["saison"]
+COLONNES_CATEGORIELLES = ["saison", "saison_meteorologique"]
 
 
 class XGBoostRegressorCustom(Regressor):
@@ -57,6 +57,7 @@ class XGBoostRegressorCustom(Regressor):
         self.colonnes_features = colonnes_features
         self.kwargs = kwargs
         self.modele = None
+
 
     def fit(self, df_train):
         """Entraîne un seul modèle XGBoost (option B : horizon_h en feature),
@@ -83,9 +84,10 @@ class XGBoostRegressorCustom(Regressor):
         """
 
         # 1. Validation set statique (30 derniers jours) pour l'early stopping
-        dates = sorted(df_train["date_prevision"].unique())
+        date_col = "prevision_date" if "prevision_date" in df_train.columns else "date_prevision"
+        dates = sorted(df_train[date_col].unique())
         val_dates = set(dates[-30:]) if len(dates) > 30 else set(dates)
-        mask_val = df_train["date_prevision"].isin(val_dates)
+        mask_val = df_train[date_col].isin(val_dates)
 
         train_split = df_train[~mask_val].copy()
         val_split = df_train[mask_val].copy()
@@ -107,6 +109,7 @@ class XGBoostRegressorCustom(Regressor):
         val_split = val_split.dropna(subset=[COLONNE_CIBLE])
 
         if self.colonnes_features is None:
+            # On prend toutes les colonnes par défaut
             self.colonnes_features = [c for c in train_split.columns if c not in COLONNES_NON_FEATURES]
 
         # 3. Séparation X/y et typage booléen (anciennement separer_x_y)
@@ -142,7 +145,7 @@ class XGBoostRegressorCustom(Regressor):
         self.modele.fit(
             X_train, y_train,
             eval_set=[(X_train, y_train), (X_val, y_val)],
-            verbose=50,
+            verbose=False,
         )
         print(f"\nNombre d'arbres réellement retenus (best_iteration) : "
             f"{self.modele.best_iteration + 1} / {parametres['n_estimators']}")
@@ -167,11 +170,18 @@ class XGBoostRegressorCustom(Regressor):
                 X_test[col] = X_test[col].astype(int)
 
         pred = self.modele.predict(X_test)
-        # return pd.DataFrame({
-        #     "timestamp_cible_paris": X_test["timestamp_cible_paris"].values,
-        #     "horizon_h": X_test["horizon_h"].values,
-        #     "consommation_predite_mw": pred,
-        # }).sort_values("horizon_h").reset_index(drop=True)
         return pd.Series(pred, index=df_test.index)
+
+
+    def get_feature_importances(self):
+        if self.modele is None:
+            return None
+
+        df_imp = pd.DataFrame({
+            'Feature': self.modele.feature_names_in_,
+            'Importance': self.modele.feature_importances_
+        })
+        return df_imp.sort_values(by='Importance', ascending=False)
+
 
 XGBoostRegressor = XGBoostRegressorCustom

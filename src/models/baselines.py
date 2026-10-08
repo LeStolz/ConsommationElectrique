@@ -1,4 +1,4 @@
-﻿from .utils import Regressor
+from .utils import Regressor
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
@@ -6,10 +6,10 @@ from sklearn.linear_model import LinearRegression
 
 class AverageRegressor(Regressor):
     """
-    Prédit que la consommation de demain sera exactement identique à la moyenne.
+    Prdit que la consommation de demain sera exactement identique  la moyenne.
     """
     def fit(self, df_train):
-        self.mean = df_train['consommation_mw'].mean()
+        self.mean = df_train['cible_consommation_mw'].mean()
 
 
     def predict(self, df_test):
@@ -18,137 +18,159 @@ class AverageRegressor(Regressor):
 
 class LastWeekPersistenceRegressor(Regressor):
     """
-    Prédit que la consommation de demain sera exactement
-    identique à celle du même jour de la semaine dernière (J-7).
+    Prdit que la consommation de demain sera exactement
+    identique  celle du mme jour de la semaine dernire (J-7).
     """
     def fit(self, df_train):
         pass
 
     def predict(self, df_test):
-        return df_test['conso_J_moins_7']
+        return df_test['consommation_mw_moins_7']
 
 
 class YesterdayPersistenceRegressor(Regressor):
     """
-    Prédit la consommation de la veille SI elle est connue à 14h,
+    Prdit la consommation de la veille SI elle est connue  14h,
     sinon se rabat sur l'avant-veille.
     """
-    def __init__(self, pred_hour_local=14):
-        self.pred_hour_local = pred_hour_local
-
     def fit(self, df_train):
         pass
 
     def predict(self, df_test):
-        return df_test['conso_J_moins_1_meme_heure']
+        return df_test['consommation_mw_meme_heure_derniere_connue']
 
 
 class LinearRegressor(Regressor):
     """
-    Régression linéaire simple utilisant le calendrier et la météo.
+    Rgression linaire simple utilisant le calendrier et la mto.
     """
-    def __init__(self, pred_hour_local=14, model=LinearRegression, features_cols=[]):
+    def __init__(self, model=LinearRegression, features_cols=[]):
         self.model = model()
-        self.pred_hour_local = pred_hour_local
         self.features_cols = features_cols
+        self.encoded_cols = []
+
+    def _prepare_data(self, df, is_fit=False):
+        X = df[self.features_cols].copy()
+
+        cat_cols = X.select_dtypes(include=['object', 'category']).columns.tolist()
+        if cat_cols:
+            X = pd.get_dummies(X, columns=cat_cols, drop_first=True, dtype=float)
+
+        if is_fit:
+            self.encoded_cols = X.columns.tolist()
+        else:
+            for col in self.encoded_cols:
+                if col not in X.columns:
+                    X[col] = 0.0
+            X = X[self.encoded_cols]
+
+        return X
 
     def fit(self, df_train):
-        self.model.fit(df_train[self.features_cols], df_train['consommation_mw'])
+        X_train = self._prepare_data(df_train, is_fit=True)
+        self.model.fit(X_train, df_train['cible_consommation_mw'])
 
     def predict(self, df_test):
-        return pd.Series(self.model.predict(df_test[self.features_cols]), index=df_test.index)
+        X_test = self._prepare_data(df_test, is_fit=False)
+        return pd.Series(self.model.predict(X_test), index=df_test.index)
+
+    def get_feature_importances(self):
+        if self.model is None or not hasattr(self.model, 'coef_'):
+            return None
+
+        import pandas as pd
+        df_imp = pd.DataFrame({
+            'Feature': self.encoded_cols,
+            'Importance': self.model.coef_
+        })
+        df_imp['Abs_Importance'] = df_imp['Importance'].abs()
+        return df_imp.sort_values(by='Abs_Importance', ascending=False)[['Feature', 'Importance']]
 
 
 class SimilarDayRegressor(Regressor):
     """
-    Jours similaires (Même jour de la semaine + Même mois de l'année dernière + Même température).
+    Jours similaires (Mme jour de la semaine + Mme mois de l'anne dernire + Mme temprature).
     """
-    def __init__(self, k=4, pred_hour_local=14, temp_weight=1.0):
+    def __init__(self, k=4, pred_hour_local=14, temp_weight=1000.0):
         self.k = k
         self.pred_hour_local = pred_hour_local
         self.temp_weight = temp_weight
 
 
-    @staticmethod
-    def _normalize(x):
-        x = np.asarray(x, dtype=float)
-        mean = np.mean(x)
-        std = np.std(x)
-        if std < 1e-8: return x - mean
-        return (x - mean) / std
-
-
     def fit(self, df_train):
-        self.history = df_train.tail(366 * 24 + 2).copy()
+        self.history = df_train.tail(2 * 366 * 24).copy()
 
 
     def predict(self, df_test):
-        assert df_test['timestamp_cible_paris'].dt.date.unique().size <= 1, "Data Leak : Prediction horizon exceeds 1 day."
+        final_prediction = pd.Series(index=df_test.index, dtype=float)
 
-        date_j_plus_1 = df_test['timestamp_cible_paris'].dt.date.iloc[0]
-        date_j = (pd.to_datetime(date_j_plus_1) - pd.Timedelta(days=1)).date()
+        col_temp = "parfait_temperature_c_pondere_pop_derniere_connue"
 
-        hist_dates_date = self.history['timestamp_cible_paris'].dt.date
-        day_j = self.history[hist_dates_date == date_j]
+        combined_history = pd.concat([self.history, df_test])
+        hist_dates_date = combined_history['cible_timestamp_paris'].dt.date
 
-        compare_hours = day_j[day_j['timestamp_cible_paris'].dt.hour < self.pred_hour_local]
+        for date_j_plus_1 in df_test['cible_timestamp_paris'].dt.date.unique():
+            mask_target_day = df_test['cible_timestamp_paris'].dt.date == date_j_plus_1
+            df_day = df_test[mask_target_day]
 
-        # Aligner strictement sur pred_hour_local heures pour gérer les jours de changement d'heure
-        s_j = compare_hours.set_index(compare_hours['timestamp_cible_paris'].dt.hour)['consommation_mw']
-        s_j = s_j.groupby(s_j.index).mean().reindex(range(self.pred_hour_local)) \
-            .interpolate(method='linear', limit_direction='both')
+            date_j = (pd.to_datetime(date_j_plus_1) - pd.DateOffset(days=1)).date()
+            day_j = combined_history[hist_dates_date == date_j]
 
-        conso_j = self._normalize(s_j.values)
-        mean_temp_j = np.mean(self._normalize(compare_hours['meteo_realiste_temperature_c_pondere_pop'].values))
+            compare_hours = day_j[day_j['cible_timestamp_paris'].dt.hour < self.pred_hour_local]
 
-        date_j_ts = pd.to_datetime(date_j)
-
-        recent_weeks = [(date_j_ts - pd.Timedelta(days=7 * i)).date() for i in range(1, 5)]
-        last_year_weeks = [(date_j_ts - pd.Timedelta(days=364 + 7 * i)).date() for i in range(0, 4)]
-
-        hist_unique_dates = set(hist_dates_date)
-        candidate_dates = set(recent_weeks + last_year_weeks).intersection(hist_unique_dates)
-        candidates = []
-
-        for d in candidate_dates:
-            date_d_compare = self.history[
-                (hist_dates_date == d) &
-                (self.history['timestamp_cible_paris'].dt.hour < self.pred_hour_local)
-            ]
-
-            date_d_plus_1_date = (pd.to_datetime(d) + pd.Timedelta(days=1)).date()
-            date_d_plus_1 = self.history[hist_dates_date == date_d_plus_1_date]
-
-            s_d = date_d_compare.set_index(date_d_compare['timestamp_cible_paris'].dt.hour)['consommation_mw']
-            s_d = s_d.groupby(s_d.index).mean().reindex(range(self.pred_hour_local)) \
+            s_j = compare_hours.set_index(compare_hours['cible_timestamp_paris'].dt.hour)['cible_consommation_mw']
+            s_j = s_j.groupby(s_j.index).mean().reindex(range(self.pred_hour_local))\
                 .interpolate(method='linear', limit_direction='both')
 
-            conso_d = self._normalize(s_d.values)
-            mean_temp_d = np.mean(self._normalize(date_d_compare['meteo_realiste_temperature_c_pondere_pop'].values))
+            conso_j = s_j.values
+            mean_temp_j = np.nanmean(compare_hours[col_temp].values)
 
-            dist_shape = np.linalg.norm(conso_j - conso_d)
-            dist_temp = abs(mean_temp_j - mean_temp_d)
-            total_dist = dist_shape + (self.temp_weight * dist_temp)
+            date_j_ts = pd.to_datetime(date_j)
+            recent_weeks = [(date_j_ts - pd.DateOffset(days=7 * i)).date() for i in range(1, 5)]
+            last_year_weeks = [(date_j_ts - pd.DateOffset(days=364 + 7 * i)).date() for i in range(0, 4)]
 
-            pred_series = date_d_plus_1.groupby(date_d_plus_1['timestamp_cible_paris'].dt.hour)['consommation_mw'].mean()
-            candidates.append({
-                'distance': total_dist,
-                'prediction': pred_series
-            })
+            hist_unique_dates = set(hist_dates_date)
+            candidate_dates = set(recent_weeks + last_year_weeks).intersection(hist_unique_dates)
+            candidates = []
 
-        candidates.sort(key=lambda x: x['distance'])
-        top_k = candidates[:self.k]
-        distances = np.array([c['distance'] for c in top_k])
+            for d in candidate_dates:
+                date_d_compare = combined_history[
+                    (hist_dates_date == d) &
+                    (combined_history['cible_timestamp_paris'].dt.hour < self.pred_hour_local)
+                ]
 
-        weights = 1.0 / (distances + 1e-8)
-        weights /= weights.sum()
+                date_d_plus_1_date = (pd.to_datetime(d) + pd.DateOffset(days=1)).date()
+                date_d_plus_1 = combined_history[hist_dates_date == date_d_plus_1_date]
 
-        final_prediction = np.zeros(len(df_test))
-        for target_index, hour in enumerate(df_test['timestamp_cible_paris'].dt.hour):
-            val = 0
-            for c_index, c in enumerate(top_k):
-                pred_val = c['prediction'].get(hour, c['prediction'].mean())
-                val += pred_val * weights[c_index]
-            final_prediction[target_index] = val
+                s_d = date_d_compare.set_index(date_d_compare['cible_timestamp_paris'].dt.hour)['cible_consommation_mw']
+                s_d = s_d.groupby(s_d.index).mean().reindex(range(self.pred_hour_local))\
+                    .interpolate(method='linear', limit_direction='both')
 
-        return pd.Series(final_prediction, index=df_test.index)
+                conso_d = s_d.values
+                mean_temp_d = np.nanmean(date_d_compare[col_temp].values)
+
+                dist_shape = np.linalg.norm(conso_j - conso_d)
+                dist_temp = abs(mean_temp_j - mean_temp_d)
+                total_dist = dist_shape + (self.temp_weight * dist_temp)
+
+                pred_series = date_d_plus_1.groupby(date_d_plus_1['cible_timestamp_paris'].dt.hour)['cible_consommation_mw'].mean()
+                candidates.append({
+                    'distance': total_dist,
+                    'prediction': pred_series
+                })
+
+            candidates.sort(key=lambda x: x['distance'])
+            top_k = candidates[:self.k]
+            distances = np.array([c['distance'] for c in top_k])
+
+            weights = 1.0 / (distances + 1e-8)
+            weights /= weights.sum()
+
+            for target_index, hour in zip(df_day.index, df_day['cible_timestamp_paris'].dt.hour):
+                val = 0
+                for c_index, c in enumerate(top_k):
+                    pred_val = c['prediction'].get(hour, c['prediction'].mean())
+                    val += pred_val * weights[c_index]
+                final_prediction.loc[target_index] = val
+
+        return final_prediction
