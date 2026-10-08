@@ -2,7 +2,7 @@
 
 Projet de prévision de la consommation électrique horaire en France métropolitaine.
 
-À **14h le jour J**, l'objectif est de prévoir les **24 valeurs horaires de consommation du jour J+1**, en respectant strictly l'information réellement disponible à cet instant (*aucune fuite de données du futur*).
+À **14h le jour J**, l'objectif est de prévoir les **24 valeurs horaires de consommation moyenne du jour J+1**, en respectant strictement l'information réellement disponible à cet instant (*aucune fuite de données du futur*).
 
 Le projet couvre la préparation des données, la construction de modèles de référence et avancés, un protocole de validation temporelle rigoureux et un audit critique complet de la chaîne de prévision.
 
@@ -27,9 +27,15 @@ Deux fichiers sont nécessaires (téléchargés à la main sur le portail ODRE /
 | **`cons-def`** (consolidées/définitives) | Source principale, la plus fiable, mais s'arrête fin juin 2026 | [ODRE cons-def](https://odre.opendatasoft.com/explore/dataset/eco2mix-national-cons-def) | `data/raw/rte_consommation/eco2mix_national_cons_def.csv` |
 | **`tr`** (temps réel) | Comble juillet → septembre 2026 ; données encore révisables, donc moins fiables | [ODRE tr](https://odre.opendatasoft.com/explore/dataset/eco2mix-national-tr) | `data/raw/rte_consommation/eco2mix_national_tr.csv` |
 
+Nous avons choisi de ne pas utiliser les autres variables disponibles que les dates et les consommations car elles risquent d'être redondantes avec la consommation :
+- Variables production : fortement corrélée entre filières et en partie ajustée à la consommation.
+- Variables renouvelables : déjà largement expliquées par les données météorologiques disponibles.
+- Variables échanges : similaire aux variables production.
+- Variables prix de marché : dépend de l'offre et de la demande et peut donc introduire du bruit comme le prix ne changent pas immédiatement ou du tout même si l'offre ou la demande changent.
+
 #### Traitement & Nettoyage
-* **Pas temporel** : Les deux fichiers sont au pas de 15 minutes (Date et Heure, avec décalage horaire explicite `+01:00`/`+02:00`), avec la colonne `Consommation (MW)` nativement renseignée seulement toutes les 30 minutes (et non 15 — vérifié sur l'ensemble de l'historique 2016-2026) ; agrégation à l'heure par moyenne (`NaN` ignorés automatiquement).
-* **Combinaison** : Données définitives prioritaires ; temps réel utilisé seulement pour les heures absentes du fichier définitif (aucun recouvrement écrasé).
+- **Pas temporel** : Les deux jeux de données sont enregistrés à un pas de 15 minutes (Date et Heure, avec décalage horaire explicite `+01:00`/`+02:00`). Cependant, pour `cons-def`, la variable `Consommation (MW)` n'est renseignée qu'une fois toutes les 30 minutes, les autres observations étant `NaN`. Les données `tr` fournissent quant à elles la consommation toutes les 15 minutes. Comme notre objectif est d'obtenir la **consommation moyenne horaire**, nous agrégeons les observations disponibles par heure en calculant leur moyenne, en ignorant les valeurs `NaN`.
+- **Combinaison des sources** : Les données définitives/consolidées sont prioritaires, et les données en temps réel sont utilisées uniquement pour compléter les périodes absentes du fichier, sans écraser les observations disponibles. En effet, les données `tr` ne sont disponibles que sur une période historique limitée et sont progressivement remplacées par les données consolidées puis définitives. Nous ne disposons donc pas d'un historique suffisamment long de données en temps réel (ou consolidées) pour entraîner le modèle à distinguer et apprendre les éventuelles spécificités de ce type de données. Nous acceptons ainsi que notre modèle soit principalement évalué sur des consommations consolidées ou définitives, considérées comme les mesures de référence.
 * **Traçabilité** : Colonne `source_donnee` conservée (*Données définitives / consolidées / temps réel / interpolé*) pour l'audit de fiabilité — toutes les heures n'ont pas le même niveau de consolidation.
 * **Conversion temporelle** : Conversion explicite en UTC (`utc=True`), avec une colonne `timestamp_paris` conservée en plus de `timestamp_utc` pour la traçabilité.
 * **Variables calendaires dérivées** : `heure`, `jour_semaine`, `jour_annee` (1 à 365/366 — capture la saisonnalité de façon continue, plus fine que mois ou saison), `mois`, `annee`, `saison`.
@@ -46,11 +52,23 @@ Deux fichiers sont nécessaires (téléchargés à la main sur le portail ODRE /
 | **2** | Confinement 2 | 30/10/2020 | 15/12/2020 |
 | **3** | Confinement 3 | 03/04/2021 | 03/05/2021 |
 
-2. **Vérification visuelle sur les données** (`src/pre_processing/verif_periodes_covid.py`, figures dans `reports/figures/covid_zoom_*.png`) : plutôt que de garder les dates officielles sans vérifier, on a tracé la consommation journalière moyenne autour de chaque confinement (±21 jours de référence) pour voir si la rupture dans les données colle bien à ces dates.
+2. **Vérification visuelle sur les données**
+
+(`src/pre_processing/verif_periodes_covid.py`, figures dans `reports/figures/covid_zoom_*.png`) : plutôt que de garder les dates officielles sans vérifier, on a tracé la consommation journalière moyenne autour de chaque confinement (±21 jours de référence) pour voir si la rupture dans les données colle bien à ces dates.
    * **Confinement 1** : Rupture nette et bien isolée — la consommation chute et remonte quasiment exactement aux dates officielles (moyenne pendant : **-28,5 %** vs avant). C'est le confinement le plus strict (arrêts d'usines, écoles fermées, télétravail généralisé), donc l'effet est net et peu confondu avec autre chose.
    * **Confinements 2 et 3** : Effet réel mais plus faible et en partie confondu avec la saisonnalité normale (la consommation continue de monter/descendre dans le même sens avant, pendant et après la période rouge, car on entre/sort de l'hiver). Logique : ces confinements étaient moins stricts (écoles ouvertes, plus d'activité économique maintenue).
 
-3. **Décision retenue** : Garder les 3 fenêtres officielles (ce sont les dates des décrets, la référence la plus objective disponible), plutôt qu'une seule grande tranche qui aurait inclus ~13 mois de "normalité" entre les 3 épisodes (été 2020, plusieurs semaines entre chaque confinement) comme période "Covid". La variable construite est :
+Le comportement de cette période est un peu différent de celui des années normales (figures dans `notebooks/01_exploration_donnees`).
+
+RTE confirme notamment un impact important des confinements sur la consommation électrique. [RTE](https://www.rte-france.com/actualites/mesures-de-deconfinement-la-consommation-en-electricite-reprend-progressivement) indique une baisse pouvant atteindre 20 % au plus fort de la crise.
+
+3. **Décision retenue** :
+
+Nous avons choisi de **conserver la période COVID-19** dans les données, tout en ajoutant un variable afin d'identifier cette période particulière.
+
+Même s'il y a un impact, cette période représente une part relativement limitée de l'ensemble des données. Cependant, la supprimer complètement poserait également un problème pour les **variables retardées**, car elle créerait une rupture dans la série temporelle. De plus, cela réduirait fortement la quantité de données disponibles pour l'entraînement si on ne gardre que les données entre 2022 et 2026. Nous préférons donc conserver cette période et laisser un variable permettre au modèle d'en tenir compte.
+
+On Garde les 3 fenêtres officielles (ce sont les dates des décrets, la référence la plus objective disponible) comme période "Covid". La variable construite est :
    * `confinement_numero` (`1`, `2`, `3` ou vide) : permet de distinguer/pondérer différemment les 3 épisodes en modélisation (et de filtrer "en confinement" avec `confinement_numero.notna()`), plutôt que de tout regrouper dans un seul indicateur booléen — utile puisque leur effet sur la consommation n'est pas le même (confinement 1 >> confinements 2 et 3).
    * **Répartition obtenue** : Confinement 1 = 1 343 h, Confinement 2 = 1 128 h, Confinement 3 = 744 h (**3 215 h au total**, sur 94 224 h).
 
@@ -96,15 +114,15 @@ Chaque variable est déclinée en **moyenne simple** et en **moyenne pondérée 
 
 Plus `timestamp_utc` et `timestamp_paris`.
 
-**Traitement** : observations ramenées à l'heure (`resample 1h`), agrégées sur les 13 stations.
+**Traitement** : les observations, disponibles toutes les 3 heures, ramenées à l'heure (`resample 1h`), agrégées sur les 13 stations. Entre deux observations, la dernière valeur connue est conservée : par exemple, si une observation est disponible à 15h, sa valeur est utilisée pour 15h, 16h et 17h. Cette méthode permet d'éviter toute fuite d'information, tout en étant adaptée à l'évolution relativement lente des variables météorologiques.
 
 #### Gestion des valeurs manquantes (température et autres variables météo)
 
 Le traitement se fait en 3 situations, dans cet ordre (chaque étape ne traite que ce que la précédente n'a pas réussi à combler) :
 
-1. **Une (ou quelques) station(s) manquante(s), pas toutes** → elle(s) est/sont ignorée(s) dans la moyenne (simple et pondérée par population), qui se recalcule sur les stations restantes. Aucune interpolation n'est nécessaire dans ce cas : il y a toujours un résultat tant qu'au moins une station a une valeur.
+1. **Une (ou quelques) station(s) manquante(s), pas toutes** → elle(s) est/sont ignorée(s) dans la moyenne (simple et pondérée par population), qui se recalcule sur les stations restantes. Aucune interpolation n'est nécessaire dans ce cas.
 2. **Les 13 stations manquantes en même temps, trou ≤ 3h** → interpolation linéaire (droite entre la valeur juste avant et juste après le trou, limitée à 3h pour rester fiable : sur un trou plus long, une droite ignorerait le cycle jour/nuit).
-3. **Les 13 stations manquantes en même temps, trou > 3h** → repli sur la **même heure du jour disponible le plus proche** (la veille si disponible, sinon le lendemain), plutôt qu'une interpolation étendue qui inventerait une tendance sur une période trop longue.
+3. **Les 13 stations manquantes en même temps, trou > 3h** → repli sur la **même heure du jour disponible le plus proche** (la veille si disponible, sinon l'avant-veille, etc), plutôt qu'une interpolation étendue qui inventerait une tendance sur une période trop longue.
 
 Script : `src/pre_processing/meteo_data_preprocessing.py`.
 
@@ -141,6 +159,55 @@ Heures concernées par l'étape 3 (trous > 3h sur les 13 stations simultanément
 ### 1. Définition & Exploration (EDA)
 - [ ] Expliciter la cible, la période d'étude, l'origine de prévision (14h J), l'horizon (24h J+1) et l'information disponible sans fuite de données.
 - [ ] Analyser les structures temporelles : cycles horaires, hebdomadaires, saisonnalité annuelle, impact météo, effets calendaires et ruptures (changements d'heure, Covid).
+
+### 2. Modélisation
+- [ ] **Modèles de référence (Baselines)** :
+  - Persistence naïve : $\hat{C}_{J+1,h} = C_{J,h}$
+  - Persistence hebdomadaire : $\hat{C}_{J+1,h} = C_{J-7,h}$
+  - Moyenne de jours comparables.
+  - Régression linéaire simple (calendrier + retards).
+- [ ] **Modèles avancés** :
+  - Séries temporelles & régressions sur variables retardées.
+  - Modèles avec covariables externes (météo, calendrier).
+  - Algorithmes d'apprentissage automatique (XGBoost, LightGBM, Random Forest, etc.).
+  - Comparaison entre stratégies de prévision : modèles séparés par heure vs modèle joint.
+
+### 3. Validation & Évaluation
+- [ ] Mettre en place un protocole de découpage temporel **Train / Validation / Test** respectant l'ordre chronologique.
+- [ ] Simuler strictement les conditions de prévision réelles à 14h.
+- [ ] Évaluer la performance globale via **MAE**, **RMSE**, erreur sur la consommation totale quotidienne, erreur sur la pointe (valeur et heure).
+- [ ] Segmenter l'évaluation par saison, type de jour (ouvrés/fériés) et conditions météo extrêmes.
+
+### 4. Rapport & Restitution
+- [ ] Rédiger le rapport synthétique (< 10 pages).
+- [ ] Effectuer un **Audit critique de la chaîne de prévision** (1 à 2 pages) :
+  - Tableau de disponibilité des informations et risques de fuite.
+  - Étude d'ablation / valeur ajoutée de la complexité des modèles.
+  - Analyse approfondie d'au moins 3 cas d'échecs majeurs.
+- [ ] Documenter l'usage de l'**Agent conversationnel** (3 exemples d'interaction analysés).
+- [ ] Préparer la présentation orale (< 10 min) et les diapositives.
+
+---
+
+## 📂 Structure du projet
+
+```text
+├── data/
+│   ├── raw/                   # Données brutes déposées manuellement
+│   │   ├── rte_consommation/
+│   │   ├── synop_meteo/
+│   │   └── calendrier/
+│   └── processed/             # Données nettoyées, fusionnées et agrégées
+├── reports/
+│   └── figures/               # Graphiques issus de l'EDA et des évaluations
+├── src/
+│   ├── pre_processing/        # Scripts de nettoyage et de fusion des données
+│   ├── models/                # Entraînement et inférence des modèles
+│   └── evaluation/            # Calcul des métriques et analyse d'erreurs
+└── README.md
+```
+
+---
 
 ### Modèlisation
 
@@ -190,37 +257,11 @@ identifiée) :
 	- Des méthodes d’apprentissage automatique.
 	- Peut-être autres modèles avec meilleur test validation.
 
-À 14h le jour J, prévoir la **average** consommation d’électricité en France métropolitaine horaire de l’ensemble de la journée J + 1:
-$$
-\hat{C}_{J+1,h}\ \forall\ h \in \{ 0...23 \}
-$$
-Un protocole parfait qui utilise a posteriori les infos (météo,...) observées pendant J+1 uniquement comme comparaison ou borne de performance.
-- Justifier pourquoi ne pas utiliser les autres données dispo de la site :
-	- Variables génération are too correlated (e.x if nuclear production drop, some other means might increase) and generation follows demand (e.x. less consommation -> less generation) so using generation is same as consommation.
-	- generation depends on weather (solar, wind,...) but we already have weather data which may cover this.
-	- Échange is similar to generation.
-	- Prix marché is similar in that it is determined by the demand (consommation) AND supply but there is little instant in which supply determines consommation, however, it also introduces noise (e.x if there is an outage, supply spike, but price usually doesn't change immediately). BUT it might reveal info about the covid19.
-- Justifier l'utilisation des données consolidées, temps réels, définitifs.
-- When covid?
-- données ND (non dispo).
-
-- **Période Covid** : la variable `confinement_numero` est disponible, mais la décision de l'exclure ou non de l'entraînement n'est pas encore prise — à documenter dans le protocole de validation on peut utiliser:
-	1.  2022-2026
-	2.  2019-2026 avec un feature pour covid
-	3.  2019-2026 sans covid feature
-	4.  2016-2026 avec covid feature
-	5.  2016-2026 sans covid feature
-	6.  2016-2026 avec covid enlevé
-
-
-- **Fiabilité variable de la consommation récente** : les heures de juillet-septembre 2026 reposent sur des données "temps réel" encore révisables (`source_donnee` = "Données temps réel"), contrairement au reste de la série (consolidé/définitif) — point à traiter explicitement dans l'audit critique (disponibilité de l'information).
-- **Valeurs manquantes résiduelles côté météo** : traitées par le script (voir section 2, "Gestion des valeurs manquantes") — interpolation ≤3h puis repli sur la même heure du jour disponible le plus proche, plus de valeur manquante en sortie.
-- **Retards de consommation et distinction scénario opérationnel / météo parfaite** : pas encore construits — relèvent de l'étape de modélisation, pas de la préparation des données.
+Un protocole parfait qui utilise a posteriori les infos (météo,...) observées pendant J+1 uniquement comme comparaison ou borne de performance. the other one uses meteo J-1 meme h if possible, if not J-2 meme h
 
 pourquoi cest donnee
-Les données seront ramenées à une granularité horaire.
-3. Préparer les données (néttoyage, agrégation, transformation, les stations météorologiques retenues, l’agrégation spatiale, le traitement des valeurs manquantes, des changements d’heure et des observations atypiques) => Les modèles pour ces structures.
-	Les 24 heures peuvent être prévues séparément ou conjointement.
+transformation, l’agrégation spatiale, des changements d’heure et des observations atypiques.
+
 
 ### Validation
 6. Séparation Train/Validation/Test doit respecter l’ordre chronologique. Le protocole précisera :
@@ -269,67 +310,5 @@ Pour chaque exemple, le groupe indiquera brièvement la tâche demandée, la pro
 - Le code (reproductible) doit couvrir le chargement ou la récupération des données, leur préparation, la construction des variables, l’apprentissage, la prévision, l’évaluation et la production des principaux résultats. Un fichier README précisera les dépendances, l’organisation des fichiers, l’ordre d’exécution et les étapes éventuellement coûteuses.
 - Présentation (< 10 mins), accompagnée de diapositives, mettra en avant le problème, le protocole, les principaux choix, les résultats, un cas d’échec significatif et la conclusion critique.
 
-Météo comment ?
-	- Météo prévisé pour J+1
-	- Météo J (mais après 14h comment ?)
-	- Météo J-1
 
 Rapport discussion
-
-Le protocole opérationnel doit respecter strictement l’information qui serait réellement disponible à 14 h le jour J.
-
-Un protocole parfait qui utilise a posteriori les infos (météo,...) observées pendant J+1 uniquement comme comparaison ou borne de performance.
-
-Le projet couvre la préparation des données, la construction de modèles de référence et de modèles plus élaborés, un protocole de validation temporelle rigoureux, et un audit critique de la chaîne de prévision complète.
-
-
-Les 24 heures peuvent être prévues séparément ou conjointement.
-
-
-
-### 2. Modélisation
-- [ ] **Modèles de référence (Baselines)** :
-  - Persistence naïve : $\hat{C}_{J+1,h} = C_{J,h}$
-  - Persistence hebdomadaire : $\hat{C}_{J+1,h} = C_{J-7,h}$
-  - Moyenne de jours comparables.
-  - Régression linéaire simple (calendrier + retards).
-- [ ] **Modèles avancés** :
-  - Séries temporelles & régressions sur variables retardées.
-  - Modèles avec covariables externes (météo, calendrier).
-  - Algorithmes d'apprentissage automatique (XGBoost, LightGBM, Random Forest, etc.).
-  - Comparaison entre stratégies de prévision : modèles séparés par heure vs modèle joint.
-
-### 3. Validation & Évaluation
-- [ ] Mettre en place un protocole de découpage temporel **Train / Validation / Test** respectant l'ordre chronologique.
-- [ ] Simuler strictement les conditions de prévision réelles à 14h.
-- [ ] Évaluer la performance globale via **MAE**, **RMSE**, erreur sur la consommation totale quotidienne, erreur sur la pointe (valeur et heure).
-- [ ] Segmenter l'évaluation par saison, type de jour (ouvrés/fériés) et conditions météo extrêmes.
-
-### 4. Rapport & Restitution
-- [ ] Rédiger le rapport synthétique (< 10 pages).
-- [ ] Effectuer un **Audit critique de la chaîne de prévision** (1 à 2 pages) :
-  - Tableau de disponibilité des informations et risques de fuite.
-  - Étude d'ablation / valeur ajoutée de la complexité des modèles.
-  - Analyse approfondie d'au moins 3 cas d'échecs majeurs.
-- [ ] Documenter l'usage de l'**Agent conversationnel** (3 exemples d'interaction analysés).
-- [ ] Préparer la présentation orale (< 10 min) et les diapositives.
-
----
-
-## 📂 Structure du projet
-
-```text
-├── data/
-│   ├── raw/                   # Données brutes déposées manuellement
-│   │   ├── rte_consommation/
-│   │   ├── synop_meteo/
-│   │   └── calendrier/
-│   └── processed/             # Données nettoyées, fusionnées et agrégées
-├── reports/
-│   └── figures/               # Graphiques issus de l'EDA et des évaluations
-├── src/
-│   ├── pre_processing/        # Scripts de nettoyage et de fusion des données
-│   ├── models/                # Entraînement et inférence des modèles
-│   └── evaluation/            # Calcul des métriques et analyse d'erreurs
-└── README.md
-```

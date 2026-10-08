@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.linear_model import LinearRegression
 
 
-class AverageRegressor(Regressor):
+class AverageRegressorBaseline(Regressor):
     """
     Prdit que la consommation de demain sera exactement identique  la moyenne.
     """
@@ -16,7 +16,7 @@ class AverageRegressor(Regressor):
         return pd.Series(self.mean, index=df_test.index)
 
 
-class LastWeekPersistenceRegressor(Regressor):
+class LastWeekRegressorBaseline(Regressor):
     """
     Prdit que la consommation de demain sera exactement
     identique  celle du mme jour de la semaine dernire (J-7).
@@ -28,7 +28,7 @@ class LastWeekPersistenceRegressor(Regressor):
         return df_test['consommation_mw_moins_7']
 
 
-class YesterdayPersistenceRegressor(Regressor):
+class YesterdayRegressorBaseline(Regressor):
     """
     Prdit la consommation de la veille SI elle est connue  14h,
     sinon se rabat sur l'avant-veille.
@@ -87,7 +87,7 @@ class LinearRegressor(Regressor):
         return df_imp.sort_values(by='Abs_Importance', ascending=False)[['Feature', 'Importance']]
 
 
-class SimilarDayRegressor(Regressor):
+class SimilarDayRegressorBaseline(Regressor):
     """
     Jours similaires (Mme jour de la semaine + Mme mois de l'anne dernire + Mme temprature).
     """
@@ -104,7 +104,7 @@ class SimilarDayRegressor(Regressor):
     def predict(self, df_test):
         final_prediction = pd.Series(index=df_test.index, dtype=float)
 
-        col_temp = "parfait_temperature_c_pondere_pop_derniere_connue"
+        col_temp = "temperature_c_pondere_pop_derniere_connue"
 
         combined_history = pd.concat([self.history, df_test])
         hist_dates_date = combined_history['cible_timestamp_paris'].dt.date

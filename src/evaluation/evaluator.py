@@ -1,7 +1,7 @@
-﻿import pandas as pd
+import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
-import time, sys, os
+import sys, os
 from sklearn.metrics import mean_absolute_error, root_mean_squared_error
 from sklearn.model_selection import ParameterGrid
 from pathlib import Path
@@ -73,9 +73,12 @@ class TimeSeriesEvaluator:
         self.df['timestamp_utc'] = pd.to_datetime(self.df['timestamp_utc'], utc=True)
         self.df['timestamp_paris'] = pd.to_datetime(self.df['timestamp_paris'], utc=True).dt.tz_convert('Europe/Paris')
 
-        self.results = {}
         self.predictions = {}
         self.models = {}
+
+        self.df_train = None
+        self.df_val = None
+        self.df_test = None
 
 
     def _normale_saisonniere(self, df):
@@ -326,6 +329,10 @@ class TimeSeriesEvaluator:
         val.to_csv(PROCESSED_DIR / "val.csv", index=False)
         test.to_csv(PROCESSED_DIR / "test.csv", index=False)
 
+        self.df_train = train
+        self.df_val = val
+        self.df_test = test
+
         return train, val, test
 
 
@@ -337,6 +344,10 @@ class TimeSeriesEvaluator:
         for df in (train, val, test):
             df['cible_timestamp_paris'] = pd.to_datetime(df['cible_timestamp_paris'], utc=True).dt.tz_convert('Europe/Paris')
             df['cible_timestamp_utc'] = pd.to_datetime(df['cible_timestamp_utc'], utc=True)
+
+        self.df_train = train
+        self.df_val = val
+        self.df_test = test
 
         return train, val, test
 
@@ -366,7 +377,7 @@ class TimeSeriesEvaluator:
         return resultats
 
 
-    def rolling_validation(self, model, df_train, df_val, freq="1ME"):
+    def _rolling_validation(self, model, df_train, df_val, freq="6ME", eval_train=True) -> tuple:
         """
         Validation walk-forward unifiée.
         - df_train : Historique initial
@@ -389,9 +400,12 @@ class TimeSeriesEvaluator:
 
         print(f"Évaluation de {model_name} | {len(df_val)} lignes | réentraînement/{freq} | {len(cutoffs)-1} itérations")
 
-        all_preds = []
-        all_y = []
-        all_horizons = []
+        all_train_preds = []
+        all_val_preds = []
+        all_train_y = []
+        all_val_y = []
+        all_train_horizons = []
+        all_val_horizons = []
 
         for i in range(len(cutoffs) - 1):
             date = cutoffs[i]
@@ -402,65 +416,112 @@ class TimeSeriesEvaluator:
 
             if not val.empty:
                 model.fit(train)
-                preds = model.predict(val)
 
-                all_preds.extend(preds)
-                all_y.extend(val[self.target_col].values)
-                all_horizons.extend(val['cible_heure'].values)
+                if eval_train:
+                    train_preds = model.predict(train)
+                    all_train_preds.extend(train_preds)
+                    all_train_y.extend(train[self.target_col].values)
+                    all_train_horizons.extend(train['cible_heure'].values)
+
+                val_preds = model.predict(val)
+                all_val_preds.extend(val_preds)
+                all_val_y.extend(val[self.target_col].values)
+                all_val_horizons.extend(val['cible_heure'].values)
 
                 sys.stdout.write(f"\rProgression: {date.strftime('%Y-%m-%d %H:%M')}...")
                 sys.stdout.flush()
 
-        res_metrics = self.evaluate_metrics(all_y, all_preds, hours=all_horizons)
+        if eval_train:
+            result_train_metrics = self.evaluate_metrics(all_train_y, all_train_preds, hours=all_train_horizons)
+            print(
+                f"\nTrain : MAE = {result_train_metrics['MAE']:.2f} MW |"
+                f"RMSE = {result_train_metrics['RMSE']:.2f} MW |"
+                f"MAPE = {result_train_metrics['MAPE']:.2f}%\n"
+            )
 
+        result_val_metrics = self.evaluate_metrics(all_val_y, all_val_preds, hours=all_val_horizons)
         print(
-            f"\nScore : MAE = {res_metrics['MAE']:.2f} MW |"
-            f"RMSE = {res_metrics['RMSE']:.2f} MW |"
-            f"MAPE = {res_metrics['MAPE']:.2f}%\n"
+            f"\nValidation : MAE = {result_val_metrics['MAE']:.2f} MW |"
+            f"RMSE = {result_val_metrics['RMSE']:.2f} MW |"
+            f"MAPE = {result_val_metrics['MAPE']:.2f}%\n"
         )
 
-        self.results[model_name] = res_metrics
-        self.predictions[model_name] = pd.Series(all_preds, index=df_val.index)
-        self.models[model_name] = model
+        return result_train_metrics, all_train_preds, result_val_metrics, all_val_preds
 
-        return res_metrics
+    def rolling_test(self, model, freq="6ME"):
+        """
+        Effectue une test glissante d'un modèle.
+        Évalue un modèles sur les ensembles Train|Validation et Test
+        """
+        model_name = model.__class__.__name__
+
+        print(f"Test évaluation de {model_name}")
+
+        df_trainval = pd.concat([self.df_train, self.df_val]).sort_values(self.date_col)
+        _, _, result_val_metrics, result_val_preds = \
+            self._rolling_validation(model, df_trainval, self.df_test, freq=freq, eval_train=False)
+
+        if not self.models.get(model_name):
+            self.models[model_name] = { "model": model }
+        self.models[model_name]["test_preds"] = result_val_preds
+        self.models[model_name]["test_metrics"] = result_val_metrics
+
+        return self.models.get(model_name)
 
 
-    def grid_search_rolling_validation(self, model_class, param_grid, df_train, df_val, freq="1ME", metric='MAE'):
+    def grid_search_rolling_validation(self, model_class, param_grid, freq="6ME", metric='MAE'):
         """
         Recherche par grille des meilleurs hyperparamètres avec validation glissante.
         """
         best_score = float('inf')
-        best_params = None
-        best_model_name = model_class.__name__
+        best_result = dict()
+        model_name = model_class.__name__
         results = []
 
         grid = list(ParameterGrid(param_grid))
-        print(f"Grid Search de {best_model_name} avec {len(grid)} combinaisons de paramètres:\n")
+        print(f"Grid Search de {model_name} :\n")
 
         for i, params in enumerate(grid):
             print(f"Combination {i+1}/{len(grid)} : {params}")
 
             model = model_class(**params)
 
-            score_dict = self.rolling_validation(model, df_train, df_val, freq=freq)
-            score = score_dict[metric]
+            result_train_metrics, result_train_preds, result_val_metrics, result_val_preds = \
+                self._rolling_validation(model, self.df_train, self.df_val, freq=freq)
+            score = result_val_metrics[metric]
 
-            results.append({'params': params, 'score': score, 'details': score_dict})
+            results.append({
+                'params': params,
+                'score': score,
+                'train_metrics': result_train_metrics,
+                'val_metrics': result_val_metrics,
+                'train_preds': result_train_preds,
+                'val_preds': result_val_preds
+            })
 
             if score < best_score:
                 best_score = score
-                best_params = params
+                best_result = results[-1]
 
-        print(f"Best {metric} : {best_score:.2f} MW")
-        print(f"Best Params : {best_params}\n")
+        print(f"Best {metric} sur Validation : {best_score:.2f} MW")
+        print(f"Best Params : {best_result['params']}\n")
 
-        return best_params, best_score, results
+        best_model = model_class(**best_result['params'])
+        best_result["model"] = best_model
+        del best_result['params']
+        del best_result['score']
+
+        self.models[model_name] = best_result
+
+        return results
 
 
     def plot_feature_importances(self, top_n=15):
         feature_importances = {}
-        for model_name, model in self.models.items():
+        for model_name, model_results in self.models.items():
+            model = model_results.get("model")
+            if not model: continue
+            
             df_imp = model.get_feature_importances()
             feature_importances[model_name] = df_imp
 
@@ -477,48 +538,35 @@ class TimeSeriesEvaluator:
             plt.show()
 
 
-    def plot_train_val_metrics(self, df_train, metric='MAE'):
+    def plot_train_val_test_metrics(self, metric='MAE'):
         """
         Compare visuellement la métrique Train vs Validation pour diagnostiquer le sur/sous-apprentissage.
         """
         model_names = []
         train_scores = []
         val_scores = []
+        test_scores = []
 
-        for name, model in self.models.items():
-            if name not in self.results:
-                continue
-
-            val_score = self.results[name].get(metric)
-            if val_score is None:
-                continue
-
-            try:
-                preds_train = model.predict(df_train)
-                y_train = df_train[self.target_col].values
-                metrics = self.evaluate_metrics(y_train, preds_train)
-                train_score = metrics.get(metric)
-            except Exception as e:
-                print(f"Impossible de prédire sur le train pour {name}: {e}")
-                continue
+        for name, model_result in self.models.items():
+            train_score = model_result.get('train_metrics', {}).get(metric, 0)
+            val_score = model_result.get('val_metrics', {}).get(metric, 0)
+            test_score = model_result.get('test_metrics', {}).get(metric, 0)
 
             model_names.append(name)
             train_scores.append(train_score)
             val_scores.append(val_score)
-
-        if not model_names:
-            print("Aucun modèle évalué n'a pu être diagnostiqué.")
-            return
+            test_scores.append(test_score)
 
         x = np.arange(len(model_names))
-        width = 0.35
+        width = 0.25
 
         fig, ax = plt.subplots(figsize=(max(8, len(model_names)*2), 6))
-        rects1 = ax.bar(x - width/2, train_scores, width, label='Train', color='#2ecc71')
-        rects2 = ax.bar(x + width/2, val_scores, width, label='Validation', color='#e74c3c')
+        rects1 = ax.bar(x - width, train_scores, width, label='Train', color='green')
+        rects2 = ax.bar(x, val_scores, width, label='Validation', color='blue')
+        rects3 = ax.bar(x + width, test_scores, width, label='Test', color='red')
 
         ax.set_ylabel(metric)
-        ax.set_title(f'Diagnostic de Sur/Sous-apprentissage ({metric})')
+        ax.set_title(f'Diagnostic ({metric})')
         ax.set_xticks(x)
         ax.set_xticklabels(model_names, rotation=45, ha='right')
         ax.legend()
@@ -534,26 +582,38 @@ class TimeSeriesEvaluator:
 
         autolabel(rects1)
         autolabel(rects2)
+        autolabel(rects3)
 
         fig.tight_layout()
         plt.show()
 
 
-    def plot_predictions(self, df_test, start_date=None, end_date=None):
-        mask = pd.Series(True, index=df_test.index)
+    def plot_predictions(self, start_date=None, end_date=None, use_test=True):
+        if use_test:
+            df_eval = self.df_test
+            pred_key = "test_preds"
+        else:
+            df_eval = self.df_val
+            pred_key = "val_preds"
+
+        if df_eval is None:
+            print("Aucune donnée disponible pour le tracé.")
+            return
+
+        mask = pd.Series(True, index=df_eval.index)
         if start_date:
-            mask = mask & (df_test[self.date_col] >= start_date)
+            mask = mask & (df_eval[self.date_col] >= start_date)
         if end_date:
-            mask = mask & (df_test[self.date_col] <= end_date)
+            mask = mask & (df_eval[self.date_col] <= end_date)
 
-        df_plot = df_test[mask]
+        df_plot = df_eval[mask]
 
-        models = [
-            name for name in self.predictions
-            if name in self.results
-        ]
-
+        models = [name for name in self.models.keys() if pred_key in self.models[name]]
         n_models = len(models)
+
+        if n_models == 0:
+            print(f"Aucune prédiction '{pred_key}' disponible.")
+            return
 
         fig, axes = plt.subplots(
             n_models,
@@ -566,7 +626,12 @@ class TimeSeriesEvaluator:
             axes = [axes]
 
         for ax, name in zip(axes, models):
-            preds = self.predictions[name]
+            preds = self.models[name][pred_key]
+            
+            # preds is a list or array, we need to convert it to Series matching df_eval index
+            if not isinstance(preds, pd.Series):
+                preds = pd.Series(preds, index=df_eval.index)
+                
             pred_plot = preds[mask]
 
             # Real consumption
@@ -597,6 +662,56 @@ class TimeSeriesEvaluator:
         plt.ylabel("Consommation (MW)")
         plt.xlabel("Date")
         plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.show()
+
+
+    def plot_error_per_horizon(self, metric='MAE', plot_test=True):
+        """
+        Trace l'erreur (ex: MAE, RMSE) en fonction de l'horizon (heure cible de la journÃ©e).
+        Affiche les erreurs de Validation (pointillÃ©s) et Test (ligne pleine) si disponibles.
+        """
+        import matplotlib.pyplot as plt
+
+        plt.figure(figsize=(14, 7))
+
+        model_plotted = False
+        for model_name, model_dict in self.models.items():
+            # 1. Validation
+            val_metrics = model_dict.get('val_metrics', {})
+            if 'per_hour' in val_metrics:
+                df_val = val_metrics['per_hour']
+                if metric in df_val.columns:
+                    plt.plot(
+                        df_val.index, df_val[metric],
+                        marker='o', linestyle='--', alpha=0.6,
+                        label=f"{model_name} (Val)"
+                    )
+                    model_plotted = True
+
+            # 2. Test
+            test_metrics = model_dict.get('test_metrics', {})
+            if plot_test and 'per_hour' in test_metrics:
+                df_test = test_metrics['per_hour']
+                if metric in df_test.columns:
+                    plt.plot(
+                        df_test.index, df_test[metric],
+                        marker='s', linestyle='-', linewidth=2,
+                        label=f"{model_name} (Test)"
+                    )
+                    model_plotted = True
+
+        if not model_plotted:
+            print("Aucune donnÃ©e par horizon trouvÃ©e.")
+            plt.close()
+            return
+
+        plt.title(f"Erreur ({metric}) par Horizon : Validation vs Test")
+        plt.xlabel("Heure cible (0h Ã  23h)")
+        plt.ylabel(f"Erreur {metric} (MW)")
+        plt.xticks(range(24))
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
         plt.show()
