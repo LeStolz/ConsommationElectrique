@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.linear_model import LinearRegression
 
 
-class AverageRegressorBaseline(Regressor):
+class AverageRegressor(Regressor):
     """
     Prdit que la consommation de demain sera exactement identique  la moyenne.
     """
@@ -16,7 +16,7 @@ class AverageRegressorBaseline(Regressor):
         return pd.Series(self.mean, index=df_test.index)
 
 
-class LastWeekRegressorBaseline(Regressor):
+class LastWeekRegressor(Regressor):
     """
     Prdit que la consommation de demain sera exactement
     identique  celle du mme jour de la semaine dernire (J-7).
@@ -28,7 +28,7 @@ class LastWeekRegressorBaseline(Regressor):
         return df_test['consommation_mw_moins_7']
 
 
-class YesterdayRegressorBaseline(Regressor):
+class YesterdayRegressor(Regressor):
     """
     Prdit la consommation de la veille SI elle est connue  14h,
     sinon se rabat sur l'avant-veille.
@@ -87,7 +87,7 @@ class LinearRegressor(Regressor):
         return df_imp.sort_values(by='Abs_Importance', ascending=False)[['Feature', 'Importance']]
 
 
-class SimilarDayRegressorBaseline(Regressor):
+class SimilarDayRegressor(Regressor):
     """
     Jours similaires (Mme jour de la semaine + Mme mois de l'anne dernire + Mme temprature).
     """
@@ -122,6 +122,10 @@ class SimilarDayRegressorBaseline(Regressor):
             s_j = s_j.groupby(s_j.index).mean().reindex(range(self.pred_hour_local))\
                 .interpolate(method='linear', limit_direction='both')
 
+            if s_j.isna().all() or len(compare_hours) == 0:
+                final_prediction.loc[df_day.index] = df_day['consommation_mw_meme_heure_derniere_connue']
+                continue
+
             conso_j = s_j.values
             mean_temp_j = np.nanmean(compare_hours[col_temp].values)
 
@@ -146,6 +150,9 @@ class SimilarDayRegressorBaseline(Regressor):
                 s_d = s_d.groupby(s_d.index).mean().reindex(range(self.pred_hour_local))\
                     .interpolate(method='linear', limit_direction='both')
 
+                if s_d.isna().all() or len(date_d_compare) == 0:
+                    continue
+
                 conso_d = s_d.values
                 mean_temp_d = np.nanmean(date_d_compare[col_temp].values)
 
@@ -158,6 +165,10 @@ class SimilarDayRegressorBaseline(Regressor):
                     'distance': total_dist,
                     'prediction': pred_series
                 })
+
+            if len(candidates) == 0:
+                final_prediction.loc[df_day.index] = df_day['consommation_mw_meme_heure_derniere_connue']
+                continue
 
             candidates.sort(key=lambda x: x['distance'])
             top_k = candidates[:self.k]

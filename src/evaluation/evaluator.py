@@ -1,4 +1,4 @@
-import pandas as pd
+﻿import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 import sys, os
@@ -307,9 +307,9 @@ class TimeSeriesEvaluator:
 
     def split_data(self, val_start, test_start, load_existing_splits=False):
         if load_existing_splits and \
-            (PROCESSED_DIR / "train.csv").exists() and \
-            (PROCESSED_DIR / "val.csv").exists() and \
-            (PROCESSED_DIR / "test.csv").exists():
+            (PROCESSED_DIR / f"{self.scenario}_train.csv").exists() and \
+            (PROCESSED_DIR / f"{self.scenario}_val.csv").exists() and \
+            (PROCESSED_DIR / f"{self.scenario}_test.csv").exists():
             return self.load_splits()
 
         feature_table = self.construct_features(self.df)
@@ -325,9 +325,9 @@ class TimeSeriesEvaluator:
             f"Test: {len(test)} lignes ({len(test) / len(feature_table) * 100:.1f}%)\n"
         )
 
-        train.to_csv(PROCESSED_DIR / "train.csv", index=False)
-        val.to_csv(PROCESSED_DIR / "val.csv", index=False)
-        test.to_csv(PROCESSED_DIR / "test.csv", index=False)
+        train.to_csv(PROCESSED_DIR / f"{self.scenario}_train.csv", index=False)
+        val.to_csv(PROCESSED_DIR / f"{self.scenario}_val.csv", index=False)
+        test.to_csv(PROCESSED_DIR / f"{self.scenario}_test.csv", index=False)
 
         self.df_train = train
         self.df_val = val
@@ -337,9 +337,9 @@ class TimeSeriesEvaluator:
 
 
     def load_splits(self):
-        train = pd.read_csv(PROCESSED_DIR / "train.csv")
-        val = pd.read_csv(PROCESSED_DIR / "val.csv")
-        test = pd.read_csv(PROCESSED_DIR / "test.csv")
+        train = pd.read_csv(PROCESSED_DIR / f"{self.scenario}_train.csv")
+        val = pd.read_csv(PROCESSED_DIR / f"{self.scenario}_val.csv")
+        test = pd.read_csv(PROCESSED_DIR / f"{self.scenario}_test.csv")
 
         for df in (train, val, test):
             df['cible_timestamp_paris'] = pd.to_datetime(df['cible_timestamp_paris'], utc=True).dt.tz_convert('Europe/Paris')
@@ -521,7 +521,7 @@ class TimeSeriesEvaluator:
         for model_name, model_results in self.models.items():
             model = model_results.get("model")
             if not model: continue
-            
+
             df_imp = model.get_feature_importances()
             feature_importances[model_name] = df_imp
 
@@ -627,11 +627,11 @@ class TimeSeriesEvaluator:
 
         for ax, name in zip(axes, models):
             preds = self.models[name][pred_key]
-            
+
             # preds is a list or array, we need to convert it to Series matching df_eval index
             if not isinstance(preds, pd.Series):
                 preds = pd.Series(preds, index=df_eval.index)
-                
+
             pred_plot = preds[mask]
 
             # Real consumption
@@ -703,12 +703,11 @@ class TimeSeriesEvaluator:
                     model_plotted = True
 
         if not model_plotted:
-            print("Aucune donnÃ©e par horizon trouvÃ©e.")
             plt.close()
             return
 
         plt.title(f"Erreur ({metric}) par Horizon : Validation vs Test")
-        plt.xlabel("Heure cible (0h Ã  23h)")
+        plt.xlabel("Heure cible (0h à 23h)")
         plt.ylabel(f"Erreur {metric} (MW)")
         plt.xticks(range(24))
         plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')

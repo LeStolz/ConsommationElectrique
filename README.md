@@ -10,8 +10,6 @@ Le projet couvre la préparation des données, la construction de modèles de r�
 
 ## 📊 Données
 
-### État d'avancement
-
 Trois sources de données ont été collectées, nettoyées puis fusionnées en un jeu de données unique au pas horaire, aligné en **UTC**, couvrant la période du **01/01/2016 au 30/09/2026** (**94 224 lignes**).
 
 > 💡 **Principe de reproductibilité** : Toutes les données sont téléchargées manuellement depuis les portails sources et déposées dans `data/raw/`. Elles sont uniquement lues (jamais récupérées dynamiquement via réseau) par les scripts du répertoire `src/pre_processing/`. Aucun appel réseau caché dans le pipeline.
@@ -39,7 +37,7 @@ Nous avons choisi de ne pas utiliser les autres variables disponibles que les da
 * **Traçabilité** : Colonne `source_donnee` conservée (*Données définitives / consolidées / temps réel / interpolé*) pour l'audit de fiabilité — toutes les heures n'ont pas le même niveau de consolidation.
 * **Conversion temporelle** : Conversion explicite en UTC (`utc=True`), avec une colonne `timestamp_paris` conservée en plus de `timestamp_utc` pour la traçabilité.
 * **Variables calendaires dérivées** : `heure`, `jour_semaine`, `jour_annee` (1 à 365/366 — capture la saisonnalité de façon continue, plus fine que mois ou saison), `mois`, `annee`, `saison`.
-* **Imputation** : 10 valeurs manquantes résiduelles interpolées (trous courts) ; **0 valeur manquante restante**.
+* **Imputation** : 10 valeurs manquantes résiduelles interpolées (trous courts).
 * **Script** : `src/pre_processing/conso_data_preprocessing.py`
 
 #### Période Covid — décision et vérification
@@ -154,13 +152,91 @@ Heures concernées par l'étape 3 (trous > 3h sur les 13 stations simultanément
 
 ---
 
-## 🗓️ Roadmap & Prochaines étapes
+## 🎯 Définition
 
-### 1. Définition & Exploration (EDA)
-- [ ] Expliciter la cible, la période d'étude, l'origine de prévision (14h J), l'horizon (24h J+1) et l'information disponible sans fuite de données.
-- [ ] Analyser les structures temporelles : cycles horaires, hebdomadaires, saisonnalité annuelle, impact météo, effets calendaires et ruptures (changements d'heure, Covid).
+Avec les jeux de données déjà en place, nous redéfinissons notre objectif :
 
-### 2. Modélisation
+À **14h le jour J**, l'objectif est de prévoir les **24 valeurs horaires de consommation moyenne de la France métropolitaine du jour J+1**.
+
+La période d'étude s'étend du **01/01/2016 au 30/09/2026**. Comme expliqué dans la section consacrée à la période COVID-19, nous avons choisi de **conserver l'ensemble de cette période**, plutôt que de supprimer les années atypiques. Cette durée permet de disposer d'un historique suffisamment long pour exploiter des modèles plus sophistiqués et apprendre les différentes saisonnalités de la consommation, tout en évitant d'intégrer des données trop anciennes qui pourraient être moins représentatives des comportements actuels.
+
+Le modèle doit utiliser uniquement les informations qui auraient réellement été disponibles au moment de la prévision :
+- l'historique de consommation connu **jusqu'à 13h le jour J** ;
+- les variables calendaires connues à l'avance ;
+- les informations météorologiques disponibles **jusqu'à 13h le jour J**, un protocole parfait qui utilise a posteriori ces infos observées pendant J+1 est aussi évalué uniquement comme borne de performance.
+
+### Heure
+
+Toutes les prévisions sont exprimées en **heure locale de Paris**, plutôt qu'en UTC. Ce choix est important car la consommation électrique dépend fortement du rythme de vie de la population, ce qui est lié à des horaires locaux.
+
+La gestion des changements d'heure est également effectuée selon cette logique. Ainsi, lors du passage à l'heure d'hiver, une journée peut comporter deux occurrences de **2h**, tandis que lors du passage à l'heure d'été, l'heure **2h locale peut être absente**. Ces heures correspondent néanmoins au même rythme de vie : elles doivent être interprétées selon leur position dans la journée locale plutôt que simplement selon leur timestamp UTC. Les deux occurrences de 2h lors du passage à l'heure d'hiver doivent donc être prédites comme des heures locales de même nature, tandis que l'heure manquante lors du passage à l'heure d'été ne doit pas être artificiellement créée comme observé lors de l'exploration des données (`notebooks/01_exploration_donnees`).
+
+Les modèles utilisent donc les variables temporelles en **heure locale de Paris** afin d'apprendre les habitudes de consommation selon le rythme journalier, hebdomadaire et saisonnier, tout en conservant l'UTC comme référence technique pour l'alignement des différentes sources de données.
+
+## Exploration
+
+Voir `notebooks/01_exploration_donnees`.
+
+On n'utilise pas FDA parce que :
+- À 14h J, on a pas la coubre complète.
+- Nos données sont régulières.
+- Il y a des trajectoires souvent pas glisses (La consommation connaît de fortes variations entre le matin et le soir)
+- Il n'y a pas beaucoup de features, donc le FPCA n'est pas important.
+
+## Modélisation
+
+**Avant de la modéliser**, il faudra donc vérifier la stationnarité de la série et déterminer quelles saisonnalités, variables retardées, informations calendaires et météorologiques sont les plus pertinentes, tout en respectant strictement les informations disponibles à **14h le jour J**.
+## Conclusion
+
+Cette analyse exploratoire met en évidence une **forte structure temporelle** de la consommation électrique, avec des variations selon l'heure, le jour de la semaine et la période de l'année. Je soupçonne notamment des **saisonnalités journalière, hebdomadaire et annuelle**, cohérentes avec les profils observés. L'**ACF et la PACF** confirment la présence de dépendances temporelles et permettent d'identifier les retards potentiellement pertinents pour la modélisation.
+
+La série présente également une **tendance à long terme**, confirmée par la décomposition STL et par l'évolution de la moyenne et de l'écart-type. On observe notamment des niveaux et écarts différents **avant, pendant et après la période COVID-19**.
+
+Les variations de température et les variables calendaires apparaissent également comme des facteurs importants. Les **changements d'heure** sont interprétés en heure locale de Paris ; l'effet du changement d'heure lui-même ne semble pas constituer une composante à modéliser séparément.
+
+Ces observations orientent naturellement le choix des modèles : les saisonnalités multiples pourront être exploitées par **XGBoost, Prophet ou une régression avec termes de Fourier**, tandis que les effets spécifiques de la période COVID-19, la calandrier ou la météo pourront être intégrés explicitement, notamment dans les modèles comme **XGBoost ou LSTM**. Mais depuis 2022, le niveau et l'écart est très stable, donc, après l'enlevement de la saisonnalité, la série peut-être stationnaire et **SARIMAX** peut marcher parce qu'il ne demande pas beaucoup de données.
+
+Enfin, les observations atypiques ne seront pas supprimées systématiquement : elles peuvent correspondre à des événements réels tels que des conditions météorologiques extrêmes, des jours fériés ou des périodes exceptionnelles.
+STL
+yearly trend
+transformation, Choisir entre une lecture additive et multiplicative simple.
+retard.
+
+Duplicated data at 2h, last sunday of march.
+Missing data at 2h, last sunday of oct.
+the other one uses meteo J-1 meme h if possible, if not J-2 meme h
+
+Our models will use direct inference because recursive inference is a bit hard with the first prediction (hour 0) having no previous hour to use for it (it only has J-1 14h and 0h) unlike others (which has J-1 14h, hh and h-1h) which complicate things.
+
+However, for direct inference, we will be using only 1 model to learn the entire 24 hours as the time of training is very long and also because there are correlations between hours, 1 model might be able to learn that correlation.
+many params.
+
+Models will be retrained every month because consumption pattern do not change that quickly and some models take very long to train. Within that month, the models don't need to use recursive because we get the real values right away.
+
+SARIMAX => modifié/limites, stationarity, diff + diff saison, correction saison ? transformation ? justifier avec ACF, PACF <-> candidats, plot residues, ACF residues, Ljung–Box.
+
+XGBoost => Bon
+- Feature engineering C[J], C[J-7], C[J-365], C[J-366], T[J], T[J-7],...
+- Unstable, overfit?
+- Intepretable
+LSTM => Bon, T[J, <=14h], T[J-1], T[J-7], T[J-365], T[J-366]
+résidu.
+Prophet par Meta
+Regression => Linear / Fourier.
+4. Modèles de référence (justifier) :
+	- moyenne historique
+	- $\hat{C}_{J+1,h} = C_{J,h}$
+	- $\hat{C}_{J+1,h} = C_{J-6/7,h}$
+	- Moyenne de plusieurs jours comparables
+	- Modèle linéaire simple fondé sur le calendrier et quelques retards.
+5. Modèles (chaque méthode doit répondre à une hypothèse ou à une limite
+identifiée) :
+	- Des modèles de séries temporelles
+	- Des régressions sur variables retardées
+	- Des méthodes avec covariables externes (météorologiques, calendaires,...)
+	- Des méthodes d’apprentissage automatique.
+	- Peut-être autres modèles avec meilleur test validation.
+
 - [ ] **Modèles de référence (Baselines)** :
   - Persistence naïve : $\hat{C}_{J+1,h} = C_{J,h}$
   - Persistence hebdomadaire : $\hat{C}_{J+1,h} = C_{J-7,h}$
@@ -209,15 +285,6 @@ Heures concernées par l'étape 3 (trous > 3h sur les 13 stations simultanément
 
 ---
 
-### Modèlisation
-
-Our models will use direct inference because recursive inference is a bit hard with the first prediction (hour 0) having no previous hour to use for it (it only has J-1 14h and 0h) unlike others (which has J-1 14h, hh and h-1h) which complicate things.
-
-However, for direct inference, we will be using only 1 model to learn the entire 24 hours as the time of training is very long and also because there are correlations between hours, 1 model might be able to learn that correlation.
-many params.
-
-Models will be retrained every month because consumption pattern do not change that quickly and some models take very long to train. Within that month, the models don't need to use recursive because we get the real values right away.
-
 Uncertainty?
 On vous donne une série, son ACF/PACF, deux modèles estimés et leurs résidus.
 1 La série semble-t-elle stationnaire ? Pourquoi ?
@@ -231,37 +298,6 @@ stability in time?
 cost?
 
 interface
-utc
-document
-
-SARIMAX => modifié/limites, stationarity, diff + diff saison, correction saison ? transformation ? justifier avec ACF, PACF <-> candidats, plot residues, ACF residues, Ljung–Box.
-
-XGBoost => Bon
-- Feature engineering C[J], C[J-7], C[J-365], C[J-366], T[J], T[J-7],...
-- Unstable, overfit?
-- Intepretable
-LSTM => Bon, T[J, <=14h], T[J-1], T[J-7], T[J-365], T[J-366]
-
-Prophet par Meta
-Regression => Linear / Fourier.
-4. Modèles de référence (justifier) :
-	- $\hat{C}_{J+1,h} = C_{J,h}$
-	- $\hat{C}_{J+1,h} = C_{J-6/7,h}$
-	- Moyenne de plusieurs jours comparables
-	- Modèle linéaire simple fondé sur le calendrier et quelques retards.
-5. Modèles (chaque méthode doit répondre à une hypothèse ou à une limite
-identifiée) :
-	- Des modèles de séries temporelles
-	- Des régressions sur variables retardées
-	- Des méthodes avec covariables externes (météorologiques, calendaires,...)
-	- Des méthodes d’apprentissage automatique.
-	- Peut-être autres modèles avec meilleur test validation.
-
-Un protocole parfait qui utilise a posteriori les infos (météo,...) observées pendant J+1 uniquement comme comparaison ou borne de performance. the other one uses meteo J-1 meme h if possible, if not J-2 meme h
-
-pourquoi cest donnee
-transformation, l’agrégation spatiale, des changements d’heure et des observations atypiques.
-
 
 ### Validation
 6. Séparation Train/Validation/Test doit respecter l’ordre chronologique. Le protocole précisera :
@@ -274,9 +310,10 @@ transformation, l’agrégation spatiale, des changements d’heure et des obser
 	Ajuster des modèles.
 
 ### Évaluation
-Les méthodes seront comparées sur les mêmes dates, la même info dispo,... avec critère MAE, RMSE, erreur sur la consommation totale quotidienne, erreur sur la valeur de la pointe et erreur sur l’heure de la pointe,... autres?
+Les méthodes seront comparées sur les mêmes dates, la même info dispo,... avec critère MAE, RMSE, erreur sur la consommation totale quotidienne, erreur sur la valeur de la pointe et erreur sur l’heure de la pointe ?
 Les performances seront également examinées selon les saisons, les jours ouvrés et non ouvrés, les jours fériés ou certaines conditions météorologiques.
 Analyser de manière critique les résultats obtenus, les erreurs, prise de recul.
+
 ### Rapport
 
 Il faut expliquer/documenter/interpreter tous dans le rapport (< 10 pages):
@@ -309,6 +346,3 @@ Pour chaque exemple, le groupe indiquera brièvement la tâche demandée, la pro
 - Rapport.
 - Le code (reproductible) doit couvrir le chargement ou la récupération des données, leur préparation, la construction des variables, l’apprentissage, la prévision, l’évaluation et la production des principaux résultats. Un fichier README précisera les dépendances, l’organisation des fichiers, l’ordre d’exécution et les étapes éventuellement coûteuses.
 - Présentation (< 10 mins), accompagnée de diapositives, mettra en avant le problème, le protocole, les principaux choix, les résultats, un cas d’échec significatif et la conclusion critique.
-
-
-Rapport discussion
