@@ -292,7 +292,7 @@ Cette approche permet de représenter plusieurs saisonnalités avec un nombre li
 
 Prophet est un modèle de prévision développé par Meta qui repose sur une décomposition de la série temporelle en plusieurs composantes : une tendance \(g(t)\), des saisonnalités \(s(t)\) et des effets calendaires \(h(t)\), auxquelles s'ajoute une erreur résiduelle.
 
-Les saisonnalités sont notamment représentées à l'aide de fonctions de Fourier, qui permettent de modéliser des cycles réguliers sans devoir créer une variable distincte pour chaque heure ou chaque période de l'année. Les effets calendaires permettent quant à eux de prendre en compte des variations particulières liées, par exemple, aux jours fériés. Des variables météorologiques peuvent également être intégrées au modèle sous forme de régresseurs supplémentaires.
+Prophet est particulièrement pratique, car il intègre nativement la tendance, les saisonnalités et les effets calendaires représentées à l'aide de fonctions de Fourier : il suffit donc d'ajouter les régresseurs météorologiques pertinents. Nous retenons uniquement les indicateurs de froid et de chaleur, afin de représenter simplement l'influence de la température de manière linéaire.
 
 L'analyse exploratoire met en évidence une saisonnalité journalière, hebdomadaire et annuelle, une évolution du niveau de consommation au cours du temps ainsi que des effets calendaires particuliers. Prophet est donc adapté à ces caractéristiques et fournit une approche complémentaire aux modèles autorégressifs et aux modèles d'apprentissage automatique.
 
@@ -310,7 +310,7 @@ Le LSTM sera donc évalué afin de déterminer si sa capacité à apprendre des 
 
 ****À AJOUTER DES DÉTAILS****
 
-#### 4.4 SARIMAX ****À VÉRIFIER****
+#### 4.5 SARIMAX ****À VÉRIFIER****
 
 **Hypothèse :** une part importante de la consommation électrique peut être prédite à partir de ses dépendances temporelles passées, en tenant compte des saisonnalités, des effets calendaires et des variables météorologiques.
 
@@ -361,19 +361,14 @@ Les modèles seront évalués selon deux scénarios météorologiques : un scén
 
 La validation repose ensuite sur une approche temporelle glissante à pas mensuel, avec les prédiction chaque jour et un réentraînement chaque mois à partir des données historiques disponibles, puis évalué sur le mois suivant. Cette fréquence constitue un compromis entre l'adaptation à l'évolution des comportements de consommation et le coût de calcul. Le test final applique le protocole retenu sans servir à modifier les variables, les hyperparamètres ou le choix du modèle.
 
-**Metrique.** Le choix de la métrique d'erreur dépend de l'application visée. Nous supposons qu'une erreur importante ponctuelle n'est pas nécessairement plus couteux que de petites erreurs récurrentes. En l'absence d'un contexte opérationnel précis, nous privilégions donc la MAE comme métrique principale, et la RMSE comme métrique secondaire. Ces deux métriques sont utilisées pour l'évaluation des modèles et la recherche d'hyperparamètres. La capacité des modèles à prévoir les pics de consommation sont étudiée aussi.
+**Metrique.**
+Le choix de la métrique d'erreur dépend de l'application visée. Nous supposons qu'une erreur importante ponctuelle n'est pas nécessairement plus couteux que de petites erreurs récurrentes. En l'absence d'un contexte opérationnel précis, nous privilégions donc la MAE comme métrique principale, et la RMSE comme métrique secondaire. Elles servent à guider la recherche d'hyperparamètres et à évaluer les modèles :
+- La capacité des modèles à prévoir les pics de consommation sera évaluée séparément, à travers l'erreur sur la consommation quotidienne totale, erreur sur la valeur de la pointe et erreur sur l’heure de la pointe.
+- Enfin, la robustesse des modèles sera étudiée en comparant leurs performances selon différentes conditions : saisons, jours ouvrés et non ouvrés, jours fériés et situations météorologiques. Cette analyse permettra notamment d'identifier les modèles dont les performances restent les plus stables dans des contextes variés.
 
-**Sélection des variables et des hyperparamètres.** La sélection initiale des variables s'appuie sur l'analyse exploratoire et les connaissances du domaine. Leur contribution est ensuite évaluée sur la validation, notamment en comparant les performances avec et sans certains groupes de variables. Une recherche par grille (*grid search*) permet également d'explorer les hyperparamètres. Les métriques d'entraînement et de validation sont comparées pour détecter un éventuel surapprentissage ou sous-apprentissage.
+**Sélection des variables et des hyperparamètres.** La sélection initiale des variables s'appuie sur l'analyse exploratoire et les connaissances du domaine. Leur contribution est ensuite évaluée sur la validation, notamment en comparant les performances avec et sans certains groupes de variables : variables calendaires, variables météorologiques et retards de consommation. Une recherche par grille (*grid search*) permet également d'explorer les hyperparamètres. Les métriques d'entraînement et de validation sont comparées pour détecter un éventuel surapprentissage ou sous-apprentissage.
 
-**Comparaison des modèles.** L'évaluateur calcule les mêmes métriques pour chaque modèle et chaque période, afin d'évaluer :
-- l'apport des variables météorologiques et calandrier et des retards de consommation ;
-- la capacité à représenter les différentes saisonnalités et conditions ;
-- l'intérêt des modèles plus complexes, comme XGBoost et LSTM ;
-- la stabilité des performances au cours du temps.
-
-Le choix final repose sur les performances de validation, en tenant compte de la robustesse et du coût de calcul. Le jeu de test final est utilisé uniquement pour estimer les performances du modèle retenu sur des données non utilisées pour sa sélection.
-
-Enfin, les observations atypiques ne sont pas supprimées systématiquement, car elles peuvent correspondre à des événements réels, tels que des conditions météorologiques extrêmes, des jours fériés ou des périodes exceptionnelles.
+**Comparaison des modèles.** L'évaluateur calcule les mêmes métriques pour chaque modèle et chaque période, afin d'évaluer l'apport des variables, la stabilité des performances au cours du temps dans différentes saisonnalités et conditions et l'intérêt des modèles plus complexes. Le choix final repose sur les performances de validation, en tenant compte de la robustesse et du coût de calcul. Le jeu de test final est utilisé uniquement pour estimer les performances du modèle retenu sur des données non utilisées pour sa sélection.
 
 ## Eval
 LSTM => Bon, T[J, <=14h], T[J-1], T[J-7], T[J-365], T[J-366]
