@@ -300,7 +300,7 @@ Sa principale limite réside dans sa capacité à représenter les dépendances 
 
 #### 4.4 LSTM
 
-**Hypothèse :** la consommation électrique présente des dépendances temporelles et des relations non linéaires avec l'historique, calendrier ou météorologue, que les modèles statistiques ou linéaires ne capturent pas nécessairement. Un réseau LSTM pourrait apprendre ces relations à partir de séquences historiques lui-même (donc pas besoin des variables de retard).
+**Hypothèse :** la consommation électrique présente des dépendances temporelles et des relations non linéaires avec l'historique, calendrier ou météorologue, que les modèles statistiques ou linéaires ne capturent pas nécessairement. Un réseau LSTM pourrait apprendre ces relations à partir de séquences historiques lui-même (donc pas besoin des variables de retard et les retard comme un ans peut être exprimé par la température).
 
 Le LSTM traite les données sous forme de séquences afin d'apprendre les évolutions de la consommation au cours du temps. L'intérêt du LSTM est sa capacité à apprendre des dépendances temporelles complexes sans imposer explicitement une forme linéaire ou prédéfinie aux relations entre les variables. Toutefois, ses performances dépendent fortement de la fenêtre historique, de l'architecture et des hyperparamètres choisis. Il nécessite également davantage de ressources d'entraînement et est moins interprétable que les modèles précédents.
 
@@ -313,6 +313,8 @@ Le LSTM sera donc évalué afin de déterminer si sa capacité à apprendre des 
 **Hypothèse :** une part importante de la consommation électrique peut être prédite à partir de ses dépendances temporelles passées, en tenant compte la tendance, des saisonnalités, des effets calendaires et des variables météorologiques.
 
 SARIMAX combine des composantes autorégressives, de moyenne mobile, de différenciation et des variables explicatives externes. L'analyse guidera le choix des hyperparamètres (voir `notebooks/03_sarimax`).
+
+Comme il prend en compte nativement des retards sur la consommation, on ajoute que les retards sur un ans.
 
 SARIMAX constitue ainsi un modèle complémentaire à Prophet et XGBoost. Ses principales limites sont la représentation des interactions non linéaires et la prise en compte de plusieurs saisonnalités. Enfin, le modèle devra produire des prévisions multi-pas entre le dernier instant disponible et les heures cibles, ce qui peut entraîner une accumulation d'erreurs.
 
