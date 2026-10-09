@@ -353,9 +353,18 @@ class TimeSeriesEvaluator:
 
 
     def evaluate_metrics(self, y_true, y_pred, hours=None):
-        """MAE/RMSE/MAPE globaux. Si hours est fourni, renvoie aussi le détail par heure."""
+        """MAE/RMSE/MAPE globaux. Si hours est fourni, renvoie aussi le detail par heure."""
         y_true = np.asarray(y_true)
         y_pred = np.asarray(y_pred)
+
+        mask = ~np.isnan(y_pred) & ~np.isnan(y_true)
+        if hours is not None and len(hours) == len(y_true):
+            hours = np.asarray(hours)[mask]
+        y_true = y_true[mask]
+        y_pred = y_pred[mask]
+
+        if len(y_true) == 0:
+            return {"MAE": np.nan, "RMSE": np.nan, "MAPE": np.nan}
 
         resultats = {
             "MAE": mean_absolute_error(y_true, y_pred),

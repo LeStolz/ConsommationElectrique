@@ -276,13 +276,11 @@ Les modèles retenus couvrent plusieurs hypothèses complémentaires.
 
 XGBoost est particulièrement intéressant grâce à son mécanisme de boosting, qui construit successivement des arbres afin de corriger les erreurs des précédents. Cette approche permet de modéliser des interactions complexes entre variables temporelles, historiques et météorologiques.
 
-Une attention particulière sera toutefois portée au surapprentissage, notamment en raison du grand nombre potentiel de variables retardées et de la forte corrélation entre certaines caractéristiques. La régularisation et la validation temporelle seront donc essentielles.
-
 #### 4.2 Régression linéaire avec termes de Fourier
 
 **Hypothèse :** la consommation électrique peut être prédite en combinant des fonctions Fourier périodiques, qui représentent les cycles récurrents à différentes échelles : journalière, hebdomadaire et annuelle, avec des variables historiques et météorologiques.
 
-Le modèle intègre également les retards de consommation, les variables calendaires et les températures, notamment à travers des indicateurs de froid et de chaleur. Ces derniers permettent de représenter les effets de températures basses ou élevées sur la consommation, dont la relation apparaît relativement linéaire d'après l'analyse exploratoire. Le modèle combine ainsi ces informations dans une relation linéaire pour estimer la consommation future.
+Le modèle intègre également les retards de consommation, les variables calendaires et les températures, notamment à travers des indicateurs de froid et de chaleur. Ces derniers permettent de représenter les effets de températures basses ou élevées sur la consommation, dont la relation est linéaire d'après l'analyse exploratoire. Le modèle combine ainsi ces informations dans une relation linéaire pour estimer la consommation future.
 
 Cette approche permet de représenter plusieurs saisonnalités avec un nombre limité de variables. Elle offre ainsi un modèle relativement simple et interprétable.
 
@@ -292,7 +290,7 @@ Cette approche permet de représenter plusieurs saisonnalités avec un nombre li
 
 Prophet est un modèle de prévision développé par Meta qui repose sur une décomposition de la série temporelle en plusieurs composantes : une tendance \(g(t)\), des saisonnalités \(s(t)\) et des effets calendaires \(h(t)\), auxquelles s'ajoute une erreur résiduelle.
 
-Prophet est particulièrement pratique, car il intègre nativement la tendance, les saisonnalités et les effets calendaires représentées à l'aide de fonctions de Fourier : il suffit donc d'ajouter les régresseurs météorologiques pertinents. Nous retenons uniquement les indicateurs de froid et de chaleur, afin de représenter simplement l'influence de la température de manière linéaire.
+Prophet est particulièrement pratique, car il intègre nativement la tendance, les saisonnalités et les effets calendaires représentées à l'aide de fonctions de Fourier : il suffit donc d'ajouter les régresseurs météorologiques pertinents.
 
 L'analyse exploratoire met en évidence une saisonnalité journalière, hebdomadaire et annuelle, une évolution du niveau de consommation au cours du temps ainsi que des effets calendaires particuliers. Prophet est donc adapté à ces caractéristiques et fournit une approche complémentaire aux modèles autorégressifs et aux modèles d'apprentissage automatique.
 
@@ -302,7 +300,7 @@ Sa principale limite réside dans sa capacité à représenter les dépendances 
 
 #### 4.4 LSTM
 
-**Hypothèse :** la consommation électrique présente des dépendances temporelles et des relations non linéaires avec l'historique, calendrier ou météorologue, que les modèles statistiques ou linéaires ne capturent pas nécessairement. Un réseau LSTM pourrait apprendre ces relations à partir de séquences historiques.
+**Hypothèse :** la consommation électrique présente des dépendances temporelles et des relations non linéaires avec l'historique, calendrier ou météorologue, que les modèles statistiques ou linéaires ne capturent pas nécessairement. Un réseau LSTM pourrait apprendre ces relations à partir de séquences historiques lui-même (donc pas besoin des variables de retard).
 
 Le LSTM traite les données sous forme de séquences afin d'apprendre les évolutions de la consommation au cours du temps. L'intérêt du LSTM est sa capacité à apprendre des dépendances temporelles complexes sans imposer explicitement une forme linéaire ou prédéfinie aux relations entre les variables. Toutefois, ses performances dépendent fortement de la fenêtre historique, de l'architecture et des hyperparamètres choisis. Il nécessite également davantage de ressources d'entraînement et est moins interprétable que les modèles précédents.
 
@@ -339,7 +337,7 @@ La validation repose ensuite sur une approche temporelle glissante à pas mensue
 Une attention particulière est portée à la frontière entre les ensembles d’entraînement et de validation afin d’éviter toute fuite de données temporelle. Pour une première journée de validation (J+1), l’entraînement ne doit inclure que les données dont la disponibilité est garantie à l’heure de prévision du jour (J), fixée à 14 h. Ainsi, la consommation de la journée (J), dont les valeurs postérieures à 14 h ne sont pas encore connues, ne doit pas être utilisée comme une observation historique complète. La dernière journée entièrement observée intégrée à l’entraînement est donc (J-1).
 
 **Metrique.**
-Le choix de la métrique d'erreur dépend de l'application visée. Nous supposons qu'une erreur importante ponctuelle n'est pas nécessairement plus couteux que de petites erreurs récurrentes. En l'absence d'un contexte opérationnel précis, nous privilégions donc la MAE comme métrique principale, et la RMSE comme métrique secondaire. Elles servent à guider la recherche d'hyperparamètres et à évaluer les modèles :
+Le choix de la métrique d'erreur dépend de l'application visée. Nous supposons qu'une erreur importante ponctuelle n'est pas nécessairement plus couteux que de petites erreurs récurrentes. En l'absence d'un contexte opérationnel précis, nous privilégions donc la MAE comme métrique principale, et la RMSE comme métrique secondaire. Elles servent à guider la recherche d'hyperparamètres (surapprentissage, régularisation,...) et à évaluer les modèles :
 - La capacité des modèles à prévoir les pics de consommation sera évaluée séparément, à travers l'erreur sur la consommation quotidienne totale, erreur sur la valeur de la pointe et erreur sur l’heure de la pointe.
 - Enfin, la robustesse des modèles sera étudiée en comparant leurs performances selon différentes conditions : saisons, jours ouvrés et non ouvrés, jours fériés et situations météorologiques. Cette analyse permettra notamment d'identifier les modèles dont les performances restent les plus stables dans des contextes variés.
 
@@ -359,7 +357,7 @@ Le choix de la métrique d'erreur dépend de l'application visée. Nous supposon
 
 
 
-LSTM => Bon, T[J, <=14h], T[J-1], T[J-7], T[J-365], T[J-366]
+LSTM
 plot residues.
 ACF residues, Ljung–Box, AIC, maybe use lag features for SARIMAX.
 Overfit?

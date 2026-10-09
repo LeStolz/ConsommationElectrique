@@ -52,12 +52,8 @@ ANNEE_MAX_TRAIN = 2023
 COLONNES_SEQ_BRUTES = [
     "cible_consommation_mw",
     "temperature_c_pondere_pop_derniere_connue",
-    # "humidite_pct_pondere_pop",
-    # "vent_vitesse_ms_pondere_pop",
-    # "nebulosite_pondere_pop",
-    # "precip_1h_mm_pondere_pop",
 ]
-NOMS_SEQ = COLONNES_SEQ_BRUTES + ["cible_heure_sin", "cible_heure_cos", "weekend", "ferie"]
+NOMS_SEQ = COLONNES_SEQ_BRUTES + ["cible_heure_sin", "cible_heure_cos", "weekend", "ferie", "vacances", "confinement_numero"]
 
 NOMS_METEO_DERIVEE = [
     "temperature_c_pondere_pop_moyenne_24h_derniere_connue",

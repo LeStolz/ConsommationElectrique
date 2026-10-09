@@ -52,8 +52,7 @@ class XGBoostRegressorCustom(Regressor):
     """
     Modèle XGBoost compatible avec l'évaluateur universel.
     """
-    def __init__(self, scenario="realiste", colonnes_features=None, **kwargs):
-        self.scenario = scenario
+    def __init__(self, colonnes_features=None, **kwargs):
         self.colonnes_features = colonnes_features
         self.kwargs = kwargs
         self.modele = None

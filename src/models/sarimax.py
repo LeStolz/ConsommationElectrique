@@ -19,6 +19,25 @@ class SARIMAXRegressor:
         self.target_col = 'cible_consommation_mw'
 
 
+    def _prepare_exog(self, df_source, is_fit=False):
+        if not self.features_cols:
+            return None
+        
+        X_feat = df_source[self.features_cols].copy()
+        cat_cols = X_feat.select_dtypes(include=['object', 'category']).columns.tolist()
+        if cat_cols:
+            X_feat = pd.get_dummies(X_feat, columns=cat_cols, drop_first=False, dtype=float)
+            
+        if is_fit:
+            self.encoded_cols = X_feat.columns.tolist()
+        else:
+            for col in getattr(self, 'encoded_cols', []):
+                if col not in X_feat.columns:
+                    X_feat[col] = 0.0
+            X_feat = X_feat[getattr(self, 'encoded_cols', X_feat.columns.tolist())]
+            
+        return X_feat.astype(float).values
+
     def fit(self, df_train):
         self.history = df_train.sort_values(self.date_col).copy()
 
@@ -30,9 +49,7 @@ class SARIMAXRegressor:
 
         y = self.history[self.target_col].values
 
-        exog = None
-        if self.features_cols:
-            exog = self.history[self.features_cols].astype(float).values
+        exog = self._prepare_exog(self.history, is_fit=True)
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -76,13 +93,13 @@ class SARIMAXRegressor:
                 
                 if not gap_known.empty:
                     y_known = gap_known[self.target_col].values
-                    exog_known = gap_known[self.features_cols].astype(float).values if self.features_cols else None
+                    exog_known = self._prepare_exog(gap_known, is_fit=False)
                     # append() met a jour la memoire SANS re-entrainer (refit=False)
                     res = res.append(endog=y_known, exog=exog_known, refit=False)
                 
                 # On forecast les heures inconnues du gap + le test set
                 df_combined_future = pd.concat([gap_unknown, df_pred])
-                exog_future = df_combined_future[self.features_cols].astype(float).values if self.features_cols else None
+                exog_future = self._prepare_exog(df_combined_future, is_fit=False)
                 
                 forecast = res.forecast(steps=len(df_combined_future), exog=exog_future)
                 
@@ -92,6 +109,6 @@ class SARIMAXRegressor:
                     
                 return pd.Series(forecast, index=df_pred.index)
             else:
-                exog = df_pred[self.features_cols].astype(float).values if self.features_cols else None
+                exog = self._prepare_exog(df_pred, is_fit=False)
                 forecast = res.forecast(steps=len(df_pred), exog=exog)
                 return pd.Series(forecast, index=df_pred.index)
