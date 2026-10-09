@@ -310,28 +310,13 @@ Le LSTM sera donc évalué afin de déterminer si sa capacité à apprendre des 
 
 ****À AJOUTER DES DÉTAILS****
 
-#### 4.5 SARIMAX ****À VÉRIFIER****
+#### 4.5 SARIMAX
 
-**Hypothèse :** une part importante de la consommation électrique peut être prédite à partir de ses dépendances temporelles passées, en tenant compte des saisonnalités, des effets calendaires et des variables météorologiques.
+**Hypothèse :** une part importante de la consommation électrique peut être prédite à partir de ses dépendances temporelles passées, en tenant compte la tendance, des saisonnalités, des effets calendaires et des variables météorologiques.
 
-SARIMAX combine des composantes autorégressives, de moyenne mobile, de différenciation et des variables explicatives externes. L'analyse ACF/PACF guidera le choix des ordres candidats autorégressifs (\(p\)) et de moyenne mobile (\(q\)).
-
-La stationnarité sera évaluée par des tests statistiques afin de déterminer si une différenciation classique ou saisonnière est nécessaire. Compte tenu de l'amplitude relativement stable des fluctuations, aucune transformation de la variance ne sera appliquée a priori et . Les saisonnalités journalière, hebdomadaire et annuelle pourront être représentées par des composantes saisonnières ou des termes de Fourier ou les variables calendaires et météorologiques, notamment les indicateurs de froid et de chaleur, seront également intégrées.
-
-Après estimation, l'ACF des résidus et le test de Ljung–Box permettront de vérifier si des dépendances temporelles persistent.
+SARIMAX combine des composantes autorégressives, de moyenne mobile, de différenciation et des variables explicatives externes. L'analyse guidera le choix des hyperparamètres (voir `notebooks/03_sarimax`).
 
 SARIMAX constitue ainsi un modèle complémentaire à Prophet et XGBoost. Ses principales limites sont la représentation des interactions non linéaires et la prise en compte de plusieurs saisonnalités. Enfin, le modèle devra produire des prévisions multi-pas entre le dernier instant disponible et les heures cibles, ce qui peut entraîner une accumulation d'erreurs.
-
-L'analyse ACF/PACF met en évidence des dépendances à différents retards. Ces résultats servent à sélectionner les candidats pour les composantes autorégressives et les composantes de moyenne mobile.
-
-- des différenciations pour traiter la non-stationnarité ;
-- des composantes saisonnières ;
-- des variables exogènes, notamment météorologiques et calendaires.
-
-La stabilité observée depuis 2022 suggère qu'après retrait ou traitement des principales saisonnalités, la série pourrait être suffisamment proche de la stationnarité pour être modélisée par SARIMAX. Cette hypothèse sera vérifiée par des tests de stationnarité plutôt que supposée à partir de l'exploration graphique.
-
-SARIMAX => modifié/limites, stationarity, diff + diff saison, correction saison ? justifier avec ACF, PACF <-> candidats.
-stationarity, must do STL to remove trend, 2022-2026 only? or all data?, seasonality, forte structure temporelle, using ACF, PACF to get p and q, not much amplitude change so no transformation is needed and additive is used.
 
 ---
 
@@ -360,10 +345,21 @@ Le choix de la métrique d'erreur dépend de l'application visée. Nous supposon
 
 **Comparaison des modèles.** L'évaluateur calcule les mêmes métriques pour chaque modèle et chaque période, afin d'évaluer l'apport des variables, la stabilité des performances au cours du temps dans différentes saisonnalités et conditions et l'intérêt des modèles plus complexes. Le choix final repose sur les performances de validation, en tenant compte de la robustesse et du coût de calcul. Le jeu de test final est utilisé uniquement pour estimer les performances du modèle retenu sur des données non utilisées pour sa sélection.
 
-## Eval
+## Évaluation
+
+
+
+
+
+
+
+
+
+
+
 LSTM => Bon, T[J, <=14h], T[J-1], T[J-7], T[J-365], T[J-366]
 plot residues.
-ACF residues, Ljung–Box
+ACF residues, Ljung–Box, AIC, maybe use lag features for SARIMAX.
 Overfit?
 
 test variable group.
