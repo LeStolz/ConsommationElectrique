@@ -418,10 +418,15 @@ class TimeSeriesEvaluator:
                 model.fit(train)
 
                 if eval_train:
-                    train_preds = model.predict(train)
+                    train_eval = train
+                    if hasattr(model, 'history_days') and model.history_days is not None:
+                        cutoff_eval = train[self.date_col].max() - pd.DateOffset(days=model.history_days)
+                        train_eval = train[train[self.date_col] >= cutoff_eval].copy()
+
+                    train_preds = model.predict(train_eval)
                     all_train_preds.extend(train_preds)
-                    all_train_y.extend(train[self.target_col].values)
-                    all_train_horizons.extend(train['cible_heure'].values)
+                    all_train_y.extend(train_eval[self.target_col].values)
+                    all_train_horizons.extend(train_eval['cible_heure'].values)
 
                 val_preds = model.predict(val)
                 all_val_preds.extend(val_preds)
@@ -715,4 +720,152 @@ class TimeSeriesEvaluator:
         plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
+        plt.show()
+
+    def plot_advanced_metrics(self, model_names=None, use_test=True):
+        """
+        Affiche des graphiques avancés comparatifs pour tous les modèles stockés :
+        1. MAE Quotidienne et MAE sur la Pointe (Valeur)
+        2. MAE sur l'Heure de Pointe
+        3. Segmentation par saison (MAE)
+        4. Segmentation par type de jour et météo (MAE)
+        """
+        df_eval = self.df_test if use_test else self.df_val
+        pred_key = "test_preds" if use_test else "val_preds"
+        
+        if model_names is not None:
+            if not isinstance(model_names, list):
+                model_names = [model_names]
+            # Convert class instances to strings
+            model_names = [m.__class__.__name__ if not isinstance(m, str) else m for m in model_names]
+        else:
+            model_names = list(self.models.keys())
+            
+        valid_models = []
+        metrics = []
+        
+        for name in model_names:
+            if name not in self.models or pred_key not in self.models[name]:
+                continue
+                
+            valid_models.append(name)
+            preds = self.models[name][pred_key]
+            
+            df_res = pd.DataFrame({
+                'date': pd.to_datetime(df_eval['date']).dt.date,
+                'heure': df_eval['cible_heure'],
+                'true': df_eval[self.target_col].values,
+                'pred': preds if isinstance(preds, np.ndarray) else preds.values,
+                'mois': df_eval['mois'].values,
+                'weekend': df_eval['weekend'].values,
+                'ferie': df_eval['ferie'].values,
+                'temp': df_eval['temperature_c_pondere_pop_derniere_connue'].values if 'temperature_c_pondere_pop_derniere_connue' in df_eval.columns else np.nan
+            })
+            
+            # 1. Quotidien
+            daily = df_res.groupby('date')[['true', 'pred']].sum()
+            mae_daily = (daily['pred'] - daily['true']).abs().mean()
+            
+            # 2. Pointe
+            idx_true = df_res.groupby('date')['true'].idxmax()
+            peak_true = df_res.loc[idx_true, ['date', 'heure', 'true']].set_index('date')
+            
+            idx_pred = df_res.groupby('date')['pred'].idxmax()
+            peak_pred = df_res.loc[idx_pred, ['date', 'heure', 'pred']].set_index('date')
+            
+            err_peak_val = (peak_pred['pred'] - peak_true['true']).abs().mean()
+            err_peak_hour = (peak_pred['heure'] - peak_true['heure']).abs().mean()
+            
+            # Segmentation
+            df_res['saison'] = df_res['mois'].map({12:'Hiver', 1:'Hiver', 2:'Hiver', 3:'Printemps', 4:'Printemps', 5:'Printemps', 6:'Eté', 7:'Eté', 8:'Eté', 9:'Automne', 10:'Automne', 11:'Automne'})
+            df_res['type_jour'] = np.where(df_res['ferie'] == 1, 'Férié', np.where(df_res['weekend'] == 1, 'Weekend', 'Ouvré'))
+            
+            if not df_res['temp'].isna().all():
+                df_res['meteo'] = pd.cut(df_res['temp'], bins=[-np.inf, 5, 25, np.inf], labels=['Froid (<5°C)', 'Normal (5-25°C)', 'Chaud (>25°C)'], observed=False)
+            else:
+                df_res['meteo'] = 'Inconnu'
+                
+            df_res['err_abs'] = (df_res['pred'] - df_res['true']).abs()
+            
+            mae_saison = df_res.groupby('saison')['err_abs'].mean().reindex(['Hiver', 'Printemps', 'Eté', 'Automne'])
+            mae_jour = df_res.groupby('type_jour')['err_abs'].mean().reindex(['Ouvré', 'Weekend', 'Férié'])
+            mae_meteo = df_res.groupby('meteo', observed=False)['err_abs'].mean()
+            
+            metrics.append({
+                'name': name,
+                'mae_daily': mae_daily,
+                'err_peak_val': err_peak_val,
+                'err_peak_hour': err_peak_hour,
+                'mae_saison': mae_saison,
+                'mae_jour': mae_jour,
+                'mae_meteo': mae_meteo
+            })
+            
+        if not metrics:
+            print("Aucun modèle n'a de prédictions pour l'ensemble demandé.")
+            return
+            
+        n_models = len(metrics)
+        x = np.arange(n_models)
+        
+        fig, axs = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle(f"Comparaison des Modèles : Évaluation Avancée ({'Test' if use_test else 'Validation'})", fontsize=18)
+        
+        # 1. MAE Quotidienne et Pointe
+        width = 0.35
+        ax1 = axs[0, 0]
+        ax1.bar(x - width/2, [m['mae_daily'] for m in metrics], width, label='Erreur Totale Quotidienne (MW)', color='skyblue')
+        ax1.bar(x + width/2, [m['err_peak_val'] for m in metrics], width, label='Erreur Pointe Absolue (MW)', color='salmon')
+        ax1.set_xticks(x)
+        ax1.set_xticklabels([m['name'] for m in metrics], rotation=15)
+        ax1.set_title("Erreur sur la journée et la Pointe")
+        ax1.legend()
+        ax1.grid(axis='y', alpha=0.3)
+        
+        # 2. Erreur Heure de Pointe
+        ax2 = axs[0, 1]
+        ax2.bar(x, [m['err_peak_hour'] for m in metrics], 0.5, color='orange')
+        ax2.set_xticks(x)
+        ax2.set_xticklabels([m['name'] for m in metrics], rotation=15)
+        ax2.set_title("Erreur Moyenne sur l'Heure de Pointe (Heures)")
+        ax2.grid(axis='y', alpha=0.3)
+        
+        # 3. Saison
+        ax3 = axs[1, 0]
+        seasons = metrics[0]['mae_saison'].index
+        x_seasons = np.arange(len(seasons))
+        width_s = 0.8 / n_models
+        for i, m in enumerate(metrics):
+            ax3.bar(x_seasons + i * width_s - 0.4 + width_s/2, m['mae_saison'].values, width_s, label=m['name'])
+        ax3.set_xticks(x_seasons)
+        ax3.set_xticklabels(seasons)
+        ax3.set_title("MAE Horaire par Saison")
+        ax3.legend()
+        ax3.grid(axis='y', alpha=0.3)
+        
+        # 4. Type de Jour & Météo
+        ax4 = axs[1, 1]
+        jours = metrics[0]['mae_jour'].index
+        x_jours = np.arange(len(jours))
+        for i, m in enumerate(metrics):
+            ax4.bar(x_jours + i * width_s - 0.4 + width_s/2, m['mae_jour'].values, width_s, label=m['name'])
+        ax4.set_xticks(x_jours)
+        ax4.set_xticklabels(jours)
+        ax4.set_title("MAE par Type de Jour (Barres)")
+        ax4.grid(axis='y', alpha=0.3)
+        
+        ax5 = ax4.twinx()
+        colors = plt.cm.get_cmap('Dark2', n_models)
+        meteo_cats = metrics[0]['mae_meteo'].index
+        for i, m in enumerate(metrics):
+            if not m['mae_meteo'].isna().all():
+                ax5.plot(range(len(meteo_cats)), m['mae_meteo'].values, marker='o', linewidth=2, color=colors(i), linestyle='--')
+        ax5.set_xticks(range(len(meteo_cats)))
+        ax5.set_xticklabels(meteo_cats) # It overlaps visually, but this represents the line plot axis
+        
+        # We put the meteo labels on a second x-axis to separate them visually
+        ax5.set_xticks(range(len(jours)))
+        ax5.set_xticklabels([])
+        
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         plt.show()

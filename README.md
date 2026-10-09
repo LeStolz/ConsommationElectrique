@@ -203,11 +203,16 @@ Les variables explicatives ont été sélectionnées à partir des résultats de
 
 Toutes les variables explicatives sont calculées uniquement à partir des informations disponibles au moment de la prévision, afin d’éviter toute fuite d’information future.
 
+**Calculation des retards temporels en gérant des changements d'heure**. Comme les retards sont calculés à partir de l'heure locale, les changements d'heure doivent être pris en compte :
+- **Heure répétée dans les données cibles et historiques :** les occurrences sont appariées à l'aide de leur heure UTC.
+- **Heure répétée uniquement dans l'historique :** les valeurs historiques correspondant à la même heure locale sont moyennées.
+- **Heures manquantes :** les valeurs sont interpolées linéairement pour compléter les heures manquantes.
+
 #### Variables temporelles
 
 Ces variables permettent de représenter les dépendances temporelles et les variations périodiques de la consommation :
 - **Heure, jour de la semaine et jour de l’année :** pour capturer les cycles journaliers, hebdomadaires et annuels mis en évidence par l’ACF.
-- **Mois et saisons (OHE) :** pour tenir compte des variations saisonnières, notamment liées aux besoins en chauffage et en climatisation.
+- **Mois, saisons, saison_météorologue (OHE) :** pour tenir compte des variations saisonnières, notamment liées aux besoins en chauffage et en climatisation.
 - **Année :** pour représenter une éventuelle tendance à long terme.
 - **Week-end, jours fériés et nombre de zones en vacance :** pour tenir compte des changements de comportement associés aux périodes non travaillées.
 - **Numéro de confinement (OHE) :** pour identifier les périodes exceptionnelles susceptibles d’avoir modifié les habitudes de consommation.
@@ -340,55 +345,44 @@ Une limite importante est que SARIMAX est naturellement conçu pour une série t
 
 ---
 
-## 5. Protocole expérimental
+## Protocole expérimental
 
-Les modèles sont réentraînés **mensuellement**. Ce choix constitue un compromis entre adaptation à l'évolution progressive des comportements de consommation et coût de calcul. Les profils de consommation ne changent pas brutalement d'un jour à l'autre dans les périodes normales, tandis que certains modèles peuvent être coûteux à entraîner.
+Afin de garantir une comparaison équitable entre les modèles, un **évaluateur centralisé** assure la préparation des données, la validation temporelle et le calcul des métriques selon un protocole commun.
 
-Entre deux réentraînements, les prévisions quotidiennes utilisent les informations réellement disponibles au moment de chaque prévision. Il n'est donc pas nécessaire d'utiliser les prédictions précédentes comme nouvelles observations : les consommations réellement observées deviennent disponibles et peuvent être utilisées pour les prévisions suivantes.
+Les modèles seront évalués selon deux scénarios météorologiques : un scénario **idéal**, dans lequel la météo de l'heure cible \(h\) du jour J+1 est connue au moment de la prévision, servant à établir une borne de performance, et un scénario **réaliste**, dans lequel seules les informations météorologiques disponibles avant 14 h le jour J peuvent être utilisées. L'évaluateur centralisé prendra en charge la préparation des données pour ces deux scénarios.
 
-Les modèles seront comparés avec une **validation temporelle**, sans mélange aléatoire des observations. Les performances seront évaluées sur plusieurs périodes afin de vérifier que les résultats ne dépendent pas d'une seule période particulière, notamment de la période COVID-19 ou d'une saison donnée.
+**Préparation des données et prévention des fuites.** L'évaluateur produit un jeu de données où chaque ligne correspond à une heure cible à prédire et contient les variables explicatives calculées uniquement à partir des informations disponibles avant 14 h le jour J. Chaque modèle utilise exclusivement les variables déjà présentes sur la ligne correspondante pour produire sa prédiction, sans recalculer des informations dans les données historiques, ce qui limite les risques de fuite de données. Lorsque cela est possible, la consommation cible est également masquée (NaN) afin d'éviter toute fuite de données.
 
-La comparaison permettra notamment d'évaluer :
+**Découpage temporel et réentraînement.** Les données sont réparties chronologiquement en trois périodes afin de préserver l'ordre temporel et de garantir que les ensembles de validation et de test couvrent chacun un cycle annuel complet, permettant ainsi d'évaluer les modèles sur l'ensemble des saisons :
 
-- le gain apporté par les variables météorologiques ;
-- l'intérêt des différentes variables retardées ;
-- l'apport des termes de Fourier ;
-- la capacité des modèles à gérer les différentes saisonnalités ;
-- l'intérêt d'une modélisation plus complexe avec XGBoost ou LSTM ;
-- la stabilité des performances dans le temps.
+- **Entraînement :** du début de 2016 au début de 2024 (~75 %) ;
+- **Validation :** de début 2024 à début 2025 (~5 %) ;
+- **Test final :** de début 2025 à septembre 2026 (~10 %).
 
-Le choix final du modèle reposera donc sur ses performances hors échantillon ou sa performance sur les données d'entraînement.
+La validation repose ensuite sur une approche temporelle glissante à pas mensuel, avec les prédiction chaque jour et un réentraînement chaque mois à partir des données historiques disponibles, puis évalué sur le mois suivant. Cette fréquence constitue un compromis entre l'adaptation à l'évolution des comportements de consommation et le coût de calcul. Le test final applique le protocole retenu sans servir à modifier les variables, les hyperparamètres ou le choix du modèle.
 
-Enfin, les observations atypiques ne seront pas supprimées systématiquement : elles peuvent correspondre à des événements réels tels que des conditions météorologiques extrêmes, des jours fériés ou des périodes exceptionnelles.
+**Metrique.** Le choix de la métrique d'erreur dépend de l'application visée. Nous supposons qu'une erreur importante ponctuelle n'est pas nécessairement plus couteux que de petites erreurs récurrentes. En l'absence d'un contexte opérationnel précis, nous privilégions donc la MAE comme métrique principale, et la RMSE comme métrique secondaire. Ces deux métriques sont utilisées pour l'évaluation des modèles et la recherche d'hyperparamètres. La capacité des modèles à prévoir les pics de consommation sont étudiée aussi.
 
-- [ ] Mettre en place un protocole de découpage temporel **Train / Validation / Test** respectant l'ordre chronologique.
-- [ ] Simuler strictement les conditions de prévision réelles à 14h.
+**Sélection des variables et des hyperparamètres.** La sélection initiale des variables s'appuie sur l'analyse exploratoire et les connaissances du domaine. Leur contribution est ensuite évaluée sur la validation, notamment en comparant les performances avec et sans certains groupes de variables. Une recherche par grille (*grid search*) permet également d'explorer les hyperparamètres. Les métriques d'entraînement et de validation sont comparées pour détecter un éventuel surapprentissage ou sous-apprentissage.
 
+**Comparaison des modèles.** L'évaluateur calcule les mêmes métriques pour chaque modèle et chaque période, afin d'évaluer :
+- l'apport des variables météorologiques et calandrier et des retards de consommation ;
+- la capacité à représenter les différentes saisonnalités et conditions ;
+- l'intérêt des modèles plus complexes, comme XGBoost et LSTM ;
+- la stabilité des performances au cours du temps.
 
-	- Les périodes train, validation, test final.
-	- La fréquence de réestimation du modèle.
-	- La sélection des variables et des hyperparamètres.
-	- Les transformations apprises sur les données.
-	- La manière de simuler les prévisions produites à 14 h.
-	Le jeu de test final ne doit servir ni à choisir les variables, ni à régler les modèles, ni à sélectionner les hyperparamètres.
-	Ajuster des modèles.
+Le choix final repose sur les performances de validation, en tenant compte de la robustesse et du coût de calcul. Le jeu de test final est utilisé uniquement pour estimer les performances du modèle retenu sur des données non utilisées pour sa sélection.
 
+Enfin, les observations atypiques ne sont pas supprimées systématiquement, car elles peuvent correspondre à des événements réels, tels que des conditions météorologiques extrêmes, des jours fériés ou des périodes exceptionnelles.
 
-
-
-Duplicated data at 2h, last sunday of march.
-Missing data at 2h, last sunday of oct.
-Comparaison entre stratégies de prévision : modèles séparés par heure vs modèle joint.
-
-
-
-# Eval
+## Eval
 LSTM => Bon, T[J, <=14h], T[J-1], T[J-7], T[J-365], T[J-366]
 plot residues.
 ACF residues, Ljung–Box
 Overfit?
 
-Les méthodes seront comparées sur les mêmes dates, la même info dispo,... avec critère MAE, RMSE, erreur sur la consommation totale quotidienne, erreur sur la valeur de la pointe et erreur sur l’heure de la pointe ?
+test variable group.
+avec critère MAE, RMSE, erreur sur la consommation totale quotidienne, erreur sur la valeur de la pointe et erreur sur l’heure de la pointe ?
 Les performances seront également examinées selon les saisons, les jours ouvrés et non ouvrés, les jours fériés ou certaines conditions météorologiques.
 Analyser de manière critique les résultats obtenus, les erreurs, prise de recul.
 
@@ -400,18 +394,13 @@ On vous donne une série, son ACF/PACF, deux modèles estimés et leurs résidus
 4 Quel modèle retenez-vous après estimation ?
 5 Les résidus permettent-ils de valider provisoirement ce choix ?
 
-AIC/BIC
 stability in time?
 cost?
 
 interface
 
-- [ ] Évaluer la performance globale via **MAE**, **RMSE**, erreur sur la consommation totale quotidienne, erreur sur la pointe (valeur et heure).
-- [ ] Segmenter l'évaluation par saison, type de jour (ouvrés/fériés) et conditions météo extrêmes.
 
-
-
-### 4. Rapport & Restitution
+## 4. Rapport & Restitution
 - [ ] Rédiger le rapport synthétique (< 10 pages).
 - [ ] Effectuer un **Audit critique de la chaîne de prévision** (1 à 2 pages) :
   - Tableau de disponibilité des informations et risques de fuite.
@@ -420,19 +409,12 @@ interface
 - [ ] Documenter l'usage de l'**Agent conversationnel** (3 exemples d'interaction analysés).
 - [ ] Préparer la présentation orale (< 10 min) et les diapositives.
 
-
-Il faut expliquer/documenter/interpreter tous dans le rapport (< 10 pages):
-- problème,
-- choix méthodologiques,
-- le protocole d’évaluation,
-- les résultats essentiels et l’analyse critique.
 - Discussion
 - La page de titre, la bibliographie et des annexes techniques raisonnables ne sont pas comptabilisées.
-- Les longues portions de code et les sorties non commentées n’ont pas leur place dans le corps du rapport.
 
-#### 8. Audit critique de la chaîne de prévision
+### 8. Audit critique de la chaîne de prévision
 
-1, 2 pages.
+2 pages.
 
 - Disponibilité de l’information : Un tableau indiquera, pour chaque variable : sa source, son instant de disponibilité, son caractère observé ou prévu, son utilisation dans le modèle et le risque éventuel de fuite d’information. Il faut répondre à la question : Cette prévision aurait-elle réellement pu être calculée à 14 h le jour J ?
 - Valeur ajoutée de la complexité, Cela vaut la peine ? : Une étude d’ablation ou de sensibilité évaluera l’apport de certains groupes de variables, par exemple la météo, le calendrier ou les retards de consommation.
@@ -440,6 +422,7 @@ Il faut expliquer/documenter/interpreter tous dans le rapport (< 10 pages):
 - Robustesse et conditions d’utilisation : Discuter la stabilité du classement des modèles selon les périodes, les métriques et les
 heures prévues. Il précisera les situations dans lesquelles il déconseillerait l’utilisation du système proposé.
 
+---
 
 ### Agent conversationnel
 Le rapport présentera trois exemples documentés :
@@ -447,8 +430,8 @@ Le rapport présentera trois exemples documentés :
 2. une proposition modifiée ou rejetée ;
 3. une erreur, faiblesse ou réponse trompeuse détectée.
 Pour chaque exemple, le groupe indiquera brièvement la tâche demandée, la proposition obtenue, la critique, décision prise et la méthode de vérification. Une annexe peut contenir un journal synthétique des usages transparent.
+
 ### À rendre
----
 
 - Rapport.
 - Le code (reproductible) doit couvrir le chargement ou la récupération des données, leur préparation, la construction des variables, l’apprentissage, la prévision, l’évaluation et la production des principaux résultats. Un fichier README précisera les dépendances, l’organisation des fichiers, l’ordre d’exécution et les étapes éventuellement coûteuses.
