@@ -156,7 +156,7 @@ Heures concernées par l'étape 3 (trous > 3h sur les 13 stations simultanément
 
 Avec les jeux de données déjà en place, nous redéfinissons notre objectif :
 
-À **14h le jour J**, l'objectif est de prévoir les **24 valeurs horaires de consommation moyenne de la France métropolitaine du jour J+1**.
+À **14h le jour J**, l'objectif est de prévoir les **24 valeurs horaires de consommation moyenne de la France métropolitaine du jour J+1 (MW)**.
 
 La période d'étude s'étend du **01/01/2016 au 30/09/2026**. Comme expliqué dans la section consacrée à la période COVID-19, nous avons choisi de **conserver l'ensemble de cette période**, plutôt que de supprimer les années atypiques. Cette durée permet de disposer d'un historique suffisamment long pour exploiter des modèles plus sophistiqués et apprendre les différentes saisonnalités de la consommation, tout en évitant d'intégrer des données trop anciennes qui pourraient être moins représentatives des comportements actuels.
 
@@ -185,74 +185,231 @@ On n'utilise pas FDA parce que :
 
 ## Modélisation
 
-**Avant de la modéliser**, il faudra donc vérifier la stationnarité de la série et déterminer quelles saisonnalités, variables retardées, informations calendaires et météorologiques sont les plus pertinentes, tout en respectant strictement les informations disponibles à **14h le jour J**.
-## Conclusion
+L’objectif de la modélisation est d'utiliser les données historiques disponibles afin d’apprendre les comportements passés et de prédire de nouvelles observations, en supposant que les tendances passées restent représentatives du futur, ce qui est vrai dans nos données saisonnière de consommation. Le protocole de modélisation doit ainsi respecter la chronologie des données, en utilisant uniquement les informations disponibles avant les observations à prédire, afin d’éviter toute fuite d’information.
 
-Cette analyse exploratoire met en évidence une **forte structure temporelle** de la consommation électrique, avec des variations selon l'heure, le jour de la semaine et la période de l'année. Je soupçonne notamment des **saisonnalités journalière, hebdomadaire et annuelle**, cohérentes avec les profils observés. L'**ACF et la PACF** confirment la présence de dépendances temporelles et permettent d'identifier les retards potentiellement pertinents pour la modélisation.
+Dans notre cas, la prédiction est réalisée exactement à 14h le jour J. Nous supposons donc qu'à cet instant, les données du jour J ne sont pas encore disponibles, et que seules les données historiques jusqu’au 13h jour J peuvent être utilisées pour construire la prédiction. Cette hypothèse reproduit ainsi les conditions réelles dans lesquelles la prévision serait effectuée.
 
-La série présente également une **tendance à long terme**, confirmée par la décomposition STL et par l'évolution de la moyenne et de l'écart-type. On observe notamment des niveaux et écarts différents **avant, pendant et après la période COVID-19**.
+### 1. Stratégie de prévision
 
-Les variations de température et les variables calendaires apparaissent également comme des facteurs importants. Les **changements d'heure** sont interprétés en heure locale de Paris ; l'effet du changement d'heure lui-même ne semble pas constituer une composante à modéliser séparément.
+Dans une approche prévision récursive, la prédiction d'une heure est utilisée comme entrée pour prédire l'heure suivante. Dans notre cas, cette approche est problématique car il existe un intervalle entre 14h le jour J et 00h le jour J+1. Il faudrait donc soit traiter sépérament ce cas ou prédire successivement les heures intermédiaires (15h J, 16h J, …, 00h J+1) avant de pouvoir prédire le reste de J+1, ce qui entraînerait une accumulation des erreurs de prédiction.
 
-Ces observations orientent naturellement le choix des modèles : les saisonnalités multiples pourront être exploitées par **XGBoost, Prophet ou une régression avec termes de Fourier**, tandis que les effets spécifiques de la période COVID-19, la calandrier ou la météo pourront être intégrés explicitement, notamment dans les modèles comme **XGBoost ou LSTM**. Mais depuis 2022, le niveau et l'écart est très stable, donc, après l'enlevement de la saisonnalité, la série peut-être stationnaire et **SARIMAX** peut marcher parce qu'il ne demande pas beaucoup de données.
+Nous préfèrons donc de prédire directement les 24 heures de J+1 à partir des informations disponibles jusqu'à 13h le jour J. Pour les modèles capables de gérer plusieurs sorties, un modèle unique est entraîné pour l'ensemble des 24 heures. Cette approche permet de partager une même représentation entre les différentes heures de la journée et peut ainsi exploiter leurs dépendances temporelles.
+
+Les modèles naturellement conçus pour une série temporelle univariée, comme SARIMAX, nécessitent quant à eux une approche récursive : les prédictions intermédiaires sont successivement utilisées pour obtenir les heures suivantes jusqu'à atteindre J+1.
+
+### 2. Feature engineering
+
+Les variables explicatives ont été sélectionnées à partir des résultats de l’analyse exploratoire pour représenter les différentes structures identifiées : dépendances temporelles, saisonnalités, calendrier, météo et évolution du niveau de consommation.
+
+Toutes les variables explicatives sont calculées uniquement à partir des informations disponibles au moment de la prévision, afin d’éviter toute fuite d’information future.
+
+#### Variables temporelles
+
+Ces variables permettent de représenter les dépendances temporelles et les variations périodiques de la consommation :
+- **Heure, jour de la semaine et jour de l’année :** pour capturer les cycles journaliers, hebdomadaires et annuels mis en évidence par l’ACF.
+- **Mois et saisons (OHE) :** pour tenir compte des variations saisonnières, notamment liées aux besoins en chauffage et en climatisation.
+- **Année :** pour représenter une éventuelle tendance à long terme.
+- **Week-end, jours fériés et nombre de zones en vacance :** pour tenir compte des changements de comportement associés aux périodes non travaillées.
+- **Numéro de confinement (OHE) :** pour identifier les périodes exceptionnelles susceptibles d’avoir modifié les habitudes de consommation.
+
+#### Encodage cyclique du temps
+
+L’heure, le jour de la semaine et le jour de l’année sont également encodés à l’aide de fonctions sinus et cosinus. Cet encodage préserve la proximité entre les extrémités d’un cycle, comme 23h et 00h, et facilite ainsi l’apprentissage des régularités périodiques par les modèles.
+
+#### Historique de la consommation électrique
+
+Le choix de ces variables repose principalement sur l’analyse ACF/PACF, qui met en évidence les dépendances entre les consommations passées et futures :
+- **Consommations décalées d’une semaine (J+1 -7) et d’environ un an (J+1 -365 et J+1 -366) :** pour exploiter les similitudes entre périodes comparables.
+- **Dernière consommation connue (13h J) et la consommation à la même heure que l'observation à prédire dernièrement disponible (Xh J si X < 14, sinon Xh J-1) :** pour représenter le niveau récent et les profils horaires habituels.
+- **Moyennes sur 24, 48 et 72 heures :** pour caractériser le niveau général de consommation récent.
+- **Minimum et maximum sur 24 heures :** pour représenter l’amplitude des variations récentes.
+- **Tendances sur 6 et 24 heures :** pour identifier les évolutions récentes.
+
+#### Variables météorologiques
+
+Seules les variables de température point rosée sont retenues, les autres variables météorologiques présentant une faible corrélation observée avec la consommation. La température point rosée peut en effet influencer les besoins en chauffage et en climatisation.
+
+Les variables considérées comprennent :
+- **Températures historiques similaire à la consommation (J+1 -7), (J+1 -365), (J+1 -366), (13h J), (Xh J si X < 14, sinon Xh J-1) :** pour exploiter les conditions thermiques passées, notamment à des périodes comparables.
+- **Moyennes sur 24, 48 et 72 heures, minimum et maximum sur 24 heures :** pour caractériser le niveau et la variabilité des températures récentes.
+- **Tendances sur 6 et 24 heures :** pour représenter leur évolution récente.
+- **Indicateurs de froid et de chaleur, cumul des périodes froides sur trois jours et écart à la normale saisonnière :** pour caractériser les conditions thermiques particulières, comme détaillé dans la section d’analyse exploratoire.
+
+### 3. Modèles de référence
+
+Avant de comparer des modèles complexes, plusieurs **baselines** sont utilisées afin de vérifier que les modèles avancés apportent réellement une amélioration.
+
+**Moyenne historique** : Une première référence consiste à prédire chaque heure par la moyenne historique correspondante. Elle fournit un niveau de référence très simple, mais ne tient pas compte des conditions récentes.
+
+**Persistence journalière** : La consommation de J+1 à l'heure $h$ est prédite à partir de la dernière consommation comparable disponible :
+
+$$
+\hat{C}_{J+1,h}=C_{J,h} si h < 14, si non \hat{C}_{J+1,h}=C_{J-1,h}
+$$
+
+Cette baseline permet de mesurer la difficulté du problème par rapport à une hypothèse de forte persistance à court terme selons ACF, PACF.
+
+**Persistence hebdomadaire** : Utilise la consommation du même jour de la semaine précédente :
+
+$$
+\hat{C}_{J+1,h}=C_{J+1 -7,h}
+$$
+
+Cette baseline est particulièrement pertinente pour l'électricité, car le comportement de consommation dépend fortement du type de journée selons ACF, PACF.
+
+**Moyenne de jours comparables** : Inspiré par une approache FDA, prédit la consommation du jour J+1 en identifiant les (k) jours historiques les plus similaires au jour J, parmi les même jours de la semaine de quatre semaines précédentes et des périodes comparables de l’année précédente. La similarité repose sur la distance entre les profils de consommation disponibles avant 14h et l’écart entre les températures moyennes correspondantes. La prédiction est ensuite calculée comme une moyenne pondérée des consommations horaires du lendemain de ces jours, en accordant davantage de poids aux plus similaires.
+
+**Régression linéaire simple** : Utilise une régression linéaire avec quelques variables calendaires et retardées. Elle permet d'obtenir un modèle simple et interprétable servant de point de comparaison aux modèles plus complexes.
+
+### 4. Modèles avancés
+
+Les modèles retenus couvrent plusieurs hypothèses complémentaires.
+
+#### 4.1 XGBoost
+
+**Hypothèse :** comme observé lors de l’analyse exploratoire, la consommation présente des effets de seuil et des interactions entre variables (baisse pendant les week-ends et jours fériés, hausse possible lors de températures élevées, etc.). Les modèles à base d’arbres sont adaptés à la capture de ces relations non linéaires, ce qui pourrait améliorer les performances par rapport aux modèles linéaires. De plus, la stabilité relative de la consommation moyenne au cours des dernières années suggère que les prédictions nécessiteront peu d’extrapolation au-delà des valeurs observées à l’entraînement, ce qui constitue un avantage pour ces modèles. Il présente également l'avantage d'être relativement interprétable grâce aux importances de variables et aux méthodes d'explication du modèle.
+
+XGBoost est particulièrement intéressant grâce à son mécanisme de boosting, qui construit successivement des arbres afin de corriger les erreurs des précédents. Cette approche permet de modéliser des interactions complexes entre variables temporelles, historiques et météorologiques.
+
+Une attention particulière sera toutefois portée au surapprentissage, notamment en raison du grand nombre potentiel de variables retardées et de la forte corrélation entre certaines caractéristiques. La régularisation et la validation temporelle seront donc essentielles.
+
+#### 4.2 Régression linéaire avec termes de Fourier
+
+**Hypothèse :** la consommation électrique peut être prédite en combinant des fonctions Fourier périodiques, qui représentent les cycles récurrents à différentes échelles : journalière, hebdomadaire et annuelle, avec des variables historiques et météorologiques.
+
+Le modèle intègre également les retards de consommation, les variables calendaires et les températures, notamment à travers des indicateurs de froid et de chaleur. Ces derniers permettent de représenter les effets de températures basses ou élevées sur la consommation, dont la relation apparaît relativement linéaire d'après l'analyse exploratoire. Le modèle combine ainsi ces informations dans une relation linéaire pour estimer la consommation future.
+
+Cette approche permet de représenter plusieurs saisonnalités avec un nombre limité de variables. Elle offre ainsi un modèle relativement simple et interprétable.
+
+#### 4.3 Prophet
+
+**Hypothèse :** la consommation électrique peut être représentée comme la combinaison d'une tendance, de plusieurs saisonnalités,  d'effets calendaires et météorologue.
+
+Prophet est un modèle de prévision développé par Meta qui repose sur une décomposition de la série temporelle en plusieurs composantes : une tendance \(g(t)\), des saisonnalités \(s(t)\) et des effets calendaires \(h(t)\), auxquelles s'ajoute une erreur résiduelle.
+
+Les saisonnalités sont notamment représentées à l'aide de fonctions de Fourier, qui permettent de modéliser des cycles réguliers sans devoir créer une variable distincte pour chaque heure ou chaque période de l'année. Les effets calendaires permettent quant à eux de prendre en compte des variations particulières liées, par exemple, aux jours fériés. Des variables météorologiques peuvent également être intégrées au modèle sous forme de régresseurs supplémentaires.
+
+L'analyse exploratoire met en évidence une saisonnalité journalière, hebdomadaire et annuelle, une évolution du niveau de consommation au cours du temps ainsi que des effets calendaires particuliers. Prophet est donc adapté à ces caractéristiques et fournit une approche complémentaire aux modèles autorégressifs et aux modèles d'apprentissage automatique.
+
+Le **mode additif** est privilégié, car l'amplitude des fluctuations saisonnières apparaît relativement stable.
+
+Sa principale limite réside dans sa capacité à représenter les dépendances complexes entre la consommation future et son historique récent, ainsi que les interactions non linéaires entre la météo et le calendrier. Ces limites justifient sa comparaison avec XGBoost.
+
+#### 4.4 LSTM
+
+**Hypothèse :** la consommation électrique présente des dépendances temporelles et des relations non linéaires avec l'historique, calendrier ou météorologue, que les modèles statistiques ou linéaires ne capturent pas nécessairement. Un réseau LSTM pourrait apprendre ces relations à partir de séquences historiques.
+
+Le LSTM traite les données sous forme de séquences afin d'apprendre les évolutions de la consommation au cours du temps. L'intérêt du LSTM est sa capacité à apprendre des dépendances temporelles complexes sans imposer explicitement une forme linéaire ou prédéfinie aux relations entre les variables. Toutefois, ses performances dépendent fortement de la fenêtre historique, de l'architecture et des hyperparamètres choisis. Il nécessite également davantage de ressources d'entraînement et est moins interprétable que les modèles précédents.
+
+Le LSTM sera donc évalué afin de déterminer si sa capacité à apprendre des représentations temporelles complexes améliore les performances de prévision par rapport à des approches plus simples, dans les mêmes conditions de validation.
+
+****À AJOUTER DES DÉTAILS****
+
+#### 4.4 SARIMAX ****À VÉRIFIER****
+
+**Hypothèse :** une part importante de la consommation électrique peut être prédite à partir de ses dépendances temporelles passées, en tenant compte des saisonnalités, des effets calendaires et des variables météorologiques.
+
+SARIMAX combine des composantes autorégressives, de moyenne mobile, de différenciation et des variables explicatives externes. L'analyse ACF/PACF guidera le choix des ordres candidats autorégressifs (\(p\)) et de moyenne mobile (\(q\)).
+
+La stationnarité sera évaluée par des tests statistiques afin de déterminer si une différenciation classique ou saisonnière est nécessaire. Compte tenu de l'amplitude relativement stable des fluctuations, aucune transformation de la variance ne sera appliquée a priori. Les saisonnalités journalière, hebdomadaire et annuelle pourront être représentées par des composantes saisonnières ou des termes de Fourier.
+
+Les variables calendaires et météorologiques, notamment les indicateurs de froid et de chaleur, seront également intégrées. Après estimation, l'ACF des résidus et le test de Ljung–Box permettront de vérifier si des dépendances temporelles persistent.
+
+SARIMAX constitue ainsi un modèle complémentaire à Prophet et XGBoost. Ses principales limites sont la représentation des interactions non linéaires et la prise en compte de plusieurs saisonnalités. Enfin, le modèle devra produire des prévisions multi-pas entre le dernier instant disponible et les heures cibles, ce qui peut entraîner une accumulation d'erreurs.
+
+**Hypothèse :** une partie importante de la consommation peut être expliquée par ses dépendances temporelles passées, après avoir traité la tendance et les saisonnalités.
+
+L'analyse ACF/PACF met en évidence des dépendances à différents retards. Ces résultats servent à sélectionner les candidats pour les composantes autorégressives et les composantes de moyenne mobile.
+
+SARIMAX est intéressant car il permet de combiner :
+
+- une composante autorégressive ;
+- une composante de moyenne mobile ;
+- des différenciations pour traiter la non-stationnarité ;
+- des composantes saisonnières ;
+- des variables exogènes, notamment météorologiques et calendaires.
+
+La stabilité observée depuis 2022 suggère qu'après retrait ou traitement des principales saisonnalités, la série pourrait être suffisamment proche de la stationnarité pour être modélisée par SARIMAX. Cette hypothèse sera vérifiée par des tests de stationnarité plutôt que supposée à partir de l'exploration graphique.
+
+SARIMAX => modifié/limites, stationarity, diff + diff saison, correction saison ? transformation ? justifier avec ACF, PACF <-> candidats.
+stationarity, must do STL to remove trend, 2022-2026 only? or all data?, seasonality, forte structure temporelle, using ACF, PACF to get p and q, not much amplitude change so no transformation is needed and additive is used.
+
+Les paramètres candidats seront guidés par l'ACF et la PACF. Après estimation, les résidus seront analysés afin de vérifier qu'ils ne conservent pas de structure temporelle importante. Nous utiliserons notamment l'ACF des résidus et le **test de Ljung–Box**.
+
+Une limite importante est que SARIMAX est naturellement conçu pour une série temporelle et une saisonnalité donnée. La présence simultanée de saisonnalités journalière, hebdomadaire et annuelle nécessite donc une adaptation, par exemple au moyen de variables de Fourier ou de variables exogènes.
+
+---
+
+## 5. Protocole expérimental
+
+Les modèles sont réentraînés **mensuellement**. Ce choix constitue un compromis entre adaptation à l'évolution progressive des comportements de consommation et coût de calcul. Les profils de consommation ne changent pas brutalement d'un jour à l'autre dans les périodes normales, tandis que certains modèles peuvent être coûteux à entraîner.
+
+Entre deux réentraînements, les prévisions quotidiennes utilisent les informations réellement disponibles au moment de chaque prévision. Il n'est donc pas nécessaire d'utiliser les prédictions précédentes comme nouvelles observations : les consommations réellement observées deviennent disponibles et peuvent être utilisées pour les prévisions suivantes.
+
+Les modèles seront comparés avec une **validation temporelle**, sans mélange aléatoire des observations. Les performances seront évaluées sur plusieurs périodes afin de vérifier que les résultats ne dépendent pas d'une seule période particulière, notamment de la période COVID-19 ou d'une saison donnée.
+
+La comparaison permettra notamment d'évaluer :
+
+- le gain apporté par les variables météorologiques ;
+- l'intérêt des différentes variables retardées ;
+- l'apport des termes de Fourier ;
+- la capacité des modèles à gérer les différentes saisonnalités ;
+- l'intérêt d'une modélisation plus complexe avec XGBoost ou LSTM ;
+- la stabilité des performances dans le temps.
+
+Le choix final du modèle reposera donc sur ses performances hors échantillon ou sa performance sur les données d'entraînement.
 
 Enfin, les observations atypiques ne seront pas supprimées systématiquement : elles peuvent correspondre à des événements réels tels que des conditions météorologiques extrêmes, des jours fériés ou des périodes exceptionnelles.
-STL
-yearly trend
-transformation, Choisir entre une lecture additive et multiplicative simple.
-retard.
+
+- [ ] Mettre en place un protocole de découpage temporel **Train / Validation / Test** respectant l'ordre chronologique.
+- [ ] Simuler strictement les conditions de prévision réelles à 14h.
+
+
+	- Les périodes train, validation, test final.
+	- La fréquence de réestimation du modèle.
+	- La sélection des variables et des hyperparamètres.
+	- Les transformations apprises sur les données.
+	- La manière de simuler les prévisions produites à 14 h.
+	Le jeu de test final ne doit servir ni à choisir les variables, ni à régler les modèles, ni à sélectionner les hyperparamètres.
+	Ajuster des modèles.
+
+
+
 
 Duplicated data at 2h, last sunday of march.
 Missing data at 2h, last sunday of oct.
-the other one uses meteo J-1 meme h if possible, if not J-2 meme h
+Comparaison entre stratégies de prévision : modèles séparés par heure vs modèle joint.
 
-Our models will use direct inference because recursive inference is a bit hard with the first prediction (hour 0) having no previous hour to use for it (it only has J-1 14h and 0h) unlike others (which has J-1 14h, hh and h-1h) which complicate things.
 
-However, for direct inference, we will be using only 1 model to learn the entire 24 hours as the time of training is very long and also because there are correlations between hours, 1 model might be able to learn that correlation.
-many params.
 
-Models will be retrained every month because consumption pattern do not change that quickly and some models take very long to train. Within that month, the models don't need to use recursive because we get the real values right away.
-
-SARIMAX => modifié/limites, stationarity, diff + diff saison, correction saison ? transformation ? justifier avec ACF, PACF <-> candidats, plot residues, ACF residues, Ljung–Box.
-
-XGBoost => Bon
-- Feature engineering C[J], C[J-7], C[J-365], C[J-366], T[J], T[J-7],...
-- Unstable, overfit?
-- Intepretable
+# Eval
 LSTM => Bon, T[J, <=14h], T[J-1], T[J-7], T[J-365], T[J-366]
-résidu.
-Prophet par Meta
-Regression => Linear / Fourier.
-4. Modèles de référence (justifier) :
-	- moyenne historique
-	- $\hat{C}_{J+1,h} = C_{J,h}$
-	- $\hat{C}_{J+1,h} = C_{J-6/7,h}$
-	- Moyenne de plusieurs jours comparables
-	- Modèle linéaire simple fondé sur le calendrier et quelques retards.
-5. Modèles (chaque méthode doit répondre à une hypothèse ou à une limite
-identifiée) :
-	- Des modèles de séries temporelles
-	- Des régressions sur variables retardées
-	- Des méthodes avec covariables externes (météorologiques, calendaires,...)
-	- Des méthodes d’apprentissage automatique.
-	- Peut-être autres modèles avec meilleur test validation.
+plot residues.
+ACF residues, Ljung–Box
+Overfit?
 
-- [ ] **Modèles de référence (Baselines)** :
-  - Persistence naïve : $\hat{C}_{J+1,h} = C_{J,h}$
-  - Persistence hebdomadaire : $\hat{C}_{J+1,h} = C_{J-7,h}$
-  - Moyenne de jours comparables.
-  - Régression linéaire simple (calendrier + retards).
-- [ ] **Modèles avancés** :
-  - Séries temporelles & régressions sur variables retardées.
-  - Modèles avec covariables externes (météo, calendrier).
-  - Algorithmes d'apprentissage automatique (XGBoost, LightGBM, Random Forest, etc.).
-  - Comparaison entre stratégies de prévision : modèles séparés par heure vs modèle joint.
+Les méthodes seront comparées sur les mêmes dates, la même info dispo,... avec critère MAE, RMSE, erreur sur la consommation totale quotidienne, erreur sur la valeur de la pointe et erreur sur l’heure de la pointe ?
+Les performances seront également examinées selon les saisons, les jours ouvrés et non ouvrés, les jours fériés ou certaines conditions météorologiques.
+Analyser de manière critique les résultats obtenus, les erreurs, prise de recul.
 
-### 3. Validation & Évaluation
-- [ ] Mettre en place un protocole de découpage temporel **Train / Validation / Test** respectant l'ordre chronologique.
-- [ ] Simuler strictement les conditions de prévision réelles à 14h.
+Uncertainty?
+On vous donne une série, son ACF/PACF, deux modèles estimés et leurs résidus.
+1 La série semble-t-elle stationnaire ? Pourquoi ?
+2 Quelle transformation proposeriez-vous si nécessaire ?
+3 Quel mécanisme AR/MA/ARMA est plausible ?
+4 Quel modèle retenez-vous après estimation ?
+5 Les résidus permettent-ils de valider provisoirement ce choix ?
+
+AIC/BIC
+stability in time?
+cost?
+
+interface
+
 - [ ] Évaluer la performance globale via **MAE**, **RMSE**, erreur sur la consommation totale quotidienne, erreur sur la pointe (valeur et heure).
 - [ ] Segmenter l'évaluation par saison, type de jour (ouvrés/fériés) et conditions météo extrêmes.
+
+
 
 ### 4. Rapport & Restitution
 - [ ] Rédiger le rapport synthétique (< 10 pages).
@@ -262,6 +419,40 @@ identifiée) :
   - Analyse approfondie d'au moins 3 cas d'échecs majeurs.
 - [ ] Documenter l'usage de l'**Agent conversationnel** (3 exemples d'interaction analysés).
 - [ ] Préparer la présentation orale (< 10 min) et les diapositives.
+
+
+Il faut expliquer/documenter/interpreter tous dans le rapport (< 10 pages):
+- problème,
+- choix méthodologiques,
+- le protocole d’évaluation,
+- les résultats essentiels et l’analyse critique.
+- Discussion
+- La page de titre, la bibliographie et des annexes techniques raisonnables ne sont pas comptabilisées.
+- Les longues portions de code et les sorties non commentées n’ont pas leur place dans le corps du rapport.
+
+#### 8. Audit critique de la chaîne de prévision
+
+1, 2 pages.
+
+- Disponibilité de l’information : Un tableau indiquera, pour chaque variable : sa source, son instant de disponibilité, son caractère observé ou prévu, son utilisation dans le modèle et le risque éventuel de fuite d’information. Il faut répondre à la question : Cette prévision aurait-elle réellement pu être calculée à 14 h le jour J ?
+- Valeur ajoutée de la complexité, Cela vaut la peine ? : Une étude d’ablation ou de sensibilité évaluera l’apport de certains groupes de variables, par exemple la météo, le calendrier ou les retards de consommation.
+- Analyse des échecs : Au moins trois journées présentant des erreurs importantes seront analysées. Pour chacune, il faut distinguer une limite des données, une limite du modèle, une rupture de régime, un événement difficilement prévisible ou une faiblesse du protocole.
+- Robustesse et conditions d’utilisation : Discuter la stabilité du classement des modèles selon les périodes, les métriques et les
+heures prévues. Il précisera les situations dans lesquelles il déconseillerait l’utilisation du système proposé.
+
+
+### Agent conversationnel
+Le rapport présentera trois exemples documentés :
+1. une proposition d’un agent conservée après vérification ;
+2. une proposition modifiée ou rejetée ;
+3. une erreur, faiblesse ou réponse trompeuse détectée.
+Pour chaque exemple, le groupe indiquera brièvement la tâche demandée, la proposition obtenue, la critique, décision prise et la méthode de vérification. Une annexe peut contenir un journal synthétique des usages transparent.
+### À rendre
+---
+
+- Rapport.
+- Le code (reproductible) doit couvrir le chargement ou la récupération des données, leur préparation, la construction des variables, l’apprentissage, la prévision, l’évaluation et la production des principaux résultats. Un fichier README précisera les dépendances, l’organisation des fichiers, l’ordre d’exécution et les étapes éventuellement coûteuses.
+- Présentation (< 10 mins), accompagnée de diapositives, mettra en avant le problème, le protocole, les principaux choix, les résultats, un cas d’échec significatif et la conclusion critique.
 
 ---
 
@@ -282,67 +473,3 @@ identifiée) :
 │   └── evaluation/            # Calcul des métriques et analyse d'erreurs
 └── README.md
 ```
-
----
-
-Uncertainty?
-On vous donne une série, son ACF/PACF, deux modèles estimés et leurs résidus.
-1 La série semble-t-elle stationnaire ? Pourquoi ?
-2 Quelle transformation proposeriez-vous si nécessaire ?
-3 Quel mécanisme AR/MA/ARMA est plausible ?
-4 Quel modèle retenez-vous après estimation ?
-5 Les résidus permettent-ils de valider provisoirement ce choix ?
-
-AIC/BIC
-stability in time?
-cost?
-
-interface
-
-### Validation
-6. Séparation Train/Validation/Test doit respecter l’ordre chronologique. Le protocole précisera :
-	- Les périodes train, validation, test final.
-	- La fréquence de réestimation du modèle.
-	- La sélection des variables et des hyperparamètres.
-	- Les transformations apprises sur les données.
-	- La manière de simuler les prévisions produites à 14 h.
-	Le jeu de test final ne doit servir ni à choisir les variables, ni à régler les modèles, ni à sélectionner les hyperparamètres.
-	Ajuster des modèles.
-
-### Évaluation
-Les méthodes seront comparées sur les mêmes dates, la même info dispo,... avec critère MAE, RMSE, erreur sur la consommation totale quotidienne, erreur sur la valeur de la pointe et erreur sur l’heure de la pointe ?
-Les performances seront également examinées selon les saisons, les jours ouvrés et non ouvrés, les jours fériés ou certaines conditions météorologiques.
-Analyser de manière critique les résultats obtenus, les erreurs, prise de recul.
-
-### Rapport
-
-Il faut expliquer/documenter/interpreter tous dans le rapport (< 10 pages):
-- problème,
-- choix méthodologiques,
-- le protocole d’évaluation,
-- les résultats essentiels et l’analyse critique.
-- Discussion
-- La page de titre, la bibliographie et des annexes techniques raisonnables ne sont pas comptabilisées.
-- Les longues portions de code et les sorties non commentées n’ont pas leur place dans le corps du rapport.
-
-#### 8. Audit critique de la chaîne de prévision
-
-1, 2 pages.
-
-- Disponibilité de l’information : Un tableau indiquera, pour chaque variable : sa source, son instant de disponibilité, son caractère observé ou prévu, son utilisation dans le modèle et le risque éventuel de fuite d’information. Il faut répondre à la question : Cette prévision aurait-elle réellement pu être calculée à 14 h le jour J ?
-- Valeur ajoutée de la complexité, Cela vaut la peine ? : Une étude d’ablation ou de sensibilité évaluera l’apport de certains groupes de variables, par exemple la météo, le calendrier ou les retards de consommation.
-- Analyse des échecs : Au moins trois journées présentant des erreurs importantes seront analysées. Pour chacune, il faut distinguer une limite des données, une limite du modèle, une rupture de régime, un événement difficilement prévisible ou une faiblesse du protocole.
-- Robustesse et conditions d’utilisation : Discuter la stabilité du classement des modèles selon les périodes, les métriques et les
-heures prévues. Il précisera les situations dans lesquelles il déconseillerait l’utilisation du système proposé.
-### Agent conversationnel
-Le rapport présentera trois exemples documentés :
-1. une proposition d’un agent conservée après vérification ;
-2. une proposition modifiée ou rejetée ;
-3. une erreur, faiblesse ou réponse trompeuse détectée.
-Pour chaque exemple, le groupe indiquera brièvement la tâche demandée, la proposition obtenue, la critique, décision prise et la méthode de vérification. Une annexe peut contenir un journal synthétique des usages transparent.
-### À rendre
----
-
-- Rapport.
-- Le code (reproductible) doit couvrir le chargement ou la récupération des données, leur préparation, la construction des variables, l’apprentissage, la prévision, l’évaluation et la production des principaux résultats. Un fichier README précisera les dépendances, l’organisation des fichiers, l’ordre d’exécution et les étapes éventuellement coûteuses.
-- Présentation (< 10 mins), accompagnée de diapositives, mettra en avant le problème, le protocole, les principaux choix, les résultats, un cas d’échec significatif et la conclusion critique.

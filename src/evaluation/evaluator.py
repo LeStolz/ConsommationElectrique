@@ -1,4 +1,4 @@
-﻿import pandas as pd
+import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 import sys, os
@@ -181,16 +181,16 @@ class TimeSeriesEvaluator:
 
         for col in lastest_known_cols:
             if col in cutoff.columns:
-                if self.scenario == "perfect":
-                    # Pour "parfait", on triche et on utilise la valeur à l'heure cible (fuite volontaire)
+                if self.scenario == "perfect" and "consommation" not in col:
+                    # Pour "parfait", on triche et on utilise la météo à l'heure cible (fuite volontaire)
                     df[f'{col}_derniere_connue'] = df[col]
                 else:
-                    # Pour réaliste, on utilise la valeur coupée à 14h
+                    # Pour réaliste (et toujours pour la conso), on utilise la valeur coupée à 14h
                     col_cutoff = cutoff.set_index('date')[col]
                     df[f'{col}_derniere_connue'] = df['date'].map(col_cutoff)
 
         for col in lastest_known_same_hour_cols:
-            if self.scenario == "perfect":
+            if self.scenario == "perfect" and "consommation" not in col:
                 df[f'{col}_meme_heure_derniere_connue'] = get_lagged_local_value(df, df, lag_days=1, col=col)
             else:
                 df[f'{col}_meme_heure_derniere_connue'] = get_latest_local_value(df, df, col, self.pred_hour_local)
@@ -431,6 +431,7 @@ class TimeSeriesEvaluator:
                 sys.stdout.write(f"\rProgression: {date.strftime('%Y-%m-%d %H:%M')}...")
                 sys.stdout.flush()
 
+        result_train_metrics = {}
         if eval_train:
             result_train_metrics = self.evaluate_metrics(all_train_y, all_train_preds, hours=all_train_horizons)
             print(
@@ -447,6 +448,7 @@ class TimeSeriesEvaluator:
         )
 
         return result_train_metrics, all_train_preds, result_val_metrics, all_val_preds
+
 
     def rolling_test(self, model, freq="6ME"):
         """

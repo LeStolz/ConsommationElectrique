@@ -12,7 +12,7 @@ logging.getLogger("prophet").setLevel(logging.ERROR)
 
 class ProphetRegressor(Regressor):
     """
-    Modle de prvision utilisant Facebook Prophet, optimis pour l'lectricit.
+    Modle de prévision utilisant Facebook Prophet.
     """
     def __init__(self, history_days=2 * 366, features_cols=[], **prophet_kwargs):
         """
@@ -72,7 +72,7 @@ class ProphetRegressor(Regressor):
             df_fit = df_train.copy()
 
         df_prophet = self._prepare_df(df_fit, is_fit=True)
-        
+
         # On dropna dynamiquement sur les colonnes encodes
         df_prophet = df_prophet.dropna(subset=['y'] + self.encoded_cols)
 
