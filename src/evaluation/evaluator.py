@@ -411,7 +411,10 @@ class TimeSeriesEvaluator:
             date = cutoffs[i]
             next_date = cutoffs[i + 1]
 
-            train = df_combined[df_combined[self.date_col] < date].copy()
+            # Pour éviter la fuite de données de 10h (à 14h le jour J, les cibles de 15h à 23h 
+            # de J ne sont pas encore connues), on tronque le train set au jour précédent (J-1).
+            strict_train_date = date - pd.Timedelta(days=1)
+            train = df_combined[df_combined[self.date_col] < strict_train_date].copy()
             val = df_combined[(df_combined[self.date_col] >= date) & (df_combined[self.date_col] < next_date)].copy()
 
             if not val.empty:
