@@ -411,13 +411,17 @@ class TimeSeriesEvaluator:
             date = cutoffs[i]
             next_date = cutoffs[i + 1]
 
-            # Pour éviter la fuite de données de 10h (à 14h le jour J, les cibles de 15h à 23h 
-            # de J ne sont pas encore connues), on tronque le train set au jour précédent (J-1).
+            # Strict cut at J-1 23:00 to prevent ANY model from seeing J 15h-23h
             strict_train_date = date - pd.Timedelta(days=1)
             train = df_combined[df_combined[self.date_col] < strict_train_date].copy()
             val = df_combined[(df_combined[self.date_col] >= date) & (df_combined[self.date_col] < next_date)].copy()
 
+            # The gap day (Day J) is passed to the model in case it needs continuous dates (ex: SARIMAX)
+            # or partial known data (ex: SimilarDayRegressor). The models are responsible for not cheating!
+            gap_data = df_combined[(df_combined[self.date_col] >= strict_train_date) & (df_combined[self.date_col] < date)].copy()
+
             if not val.empty:
+                model.gap_data = gap_data
                 model.fit(train)
 
                 if eval_train:
@@ -479,7 +483,7 @@ class TimeSeriesEvaluator:
         return self.models.get(model_name)
 
 
-    def grid_search_rolling_validation(self, model_class, param_grid, freq="6ME", metric='MAE'):
+    def grid_search_rolling_validation(self, model_class, param_grid, freq="6ME", metric='MAE', eval_train=True):
         """
         Recherche par grille des meilleurs hyperparamètres avec validation glissante.
         """
@@ -491,13 +495,15 @@ class TimeSeriesEvaluator:
         grid = list(ParameterGrid(param_grid))
         print(f"Grid Search de {model_name} :\n")
 
+        best_fitted_model = None
+
         for i, params in enumerate(grid):
             print(f"Combination {i+1}/{len(grid)} : {params}")
 
             model = model_class(**params)
 
             result_train_metrics, result_train_preds, result_val_metrics, result_val_preds = \
-                self._rolling_validation(model, self.df_train, self.df_val, freq=freq)
+                self._rolling_validation(model, self.df_train, self.df_val, freq=freq, eval_train=eval_train)
             score = result_val_metrics[metric]
 
             results.append({
@@ -512,25 +518,25 @@ class TimeSeriesEvaluator:
             if score < best_score:
                 best_score = score
                 best_result = results[-1]
+                best_fitted_model = model
 
         print(f"Best {metric} sur Validation : {best_score:.2f} MW")
         print(f"Best Params : {best_result['params']}\n")
 
-        best_model = model_class(**best_result['params'])
-        best_result["model"] = best_model
+        best_result["model"] = best_fitted_model
         del best_result['params']
         del best_result['score']
 
         self.models[model_name] = best_result
 
-        return results
+        return results, best_result
 
 
     def plot_feature_importances(self, top_n=15):
         feature_importances = {}
         for model_name, model_results in self.models.items():
             model = model_results.get("model")
-            if not model: continue
+            if not model or not hasattr(model, 'get_feature_importances'): continue
 
             df_imp = model.get_feature_importances()
             feature_importances[model_name] = df_imp
@@ -682,48 +688,77 @@ class TimeSeriesEvaluator:
         Trace l'erreur (ex: MAE, RMSE) en fonction de l'horizon (heure cible de la journÃ©e).
         Affiche les erreurs de Validation (pointillÃ©s) et Test (ligne pleine) si disponibles.
         """
-        import matplotlib.pyplot as plt
 
-        plt.figure(figsize=(14, 7))
+        fig, axes = plt.subplots(3, 1, figsize=(14, 18), sharex=True, sharey=False)
+        ax_train, ax_val, ax_test = axes
 
-        model_plotted = False
+        train_plotted = False
+        val_plotted = False
+        test_plotted = False
+
         for model_name, model_dict in self.models.items():
+            # 0. Train
+            train_metrics = model_dict.get('train_metrics', {})
+            if 'per_hour' in train_metrics:
+                df_train = train_metrics['per_hour']
+                if metric in df_train.columns:
+                    ax_train.plot(
+                        df_train.index, df_train[metric],
+                        marker='^', linestyle=':', alpha=0.8,
+                        label=f"{model_name} (Train)"
+                    )
+                    train_plotted = True
+
             # 1. Validation
             val_metrics = model_dict.get('val_metrics', {})
             if 'per_hour' in val_metrics:
                 df_val = val_metrics['per_hour']
                 if metric in df_val.columns:
-                    plt.plot(
+                    ax_val.plot(
                         df_val.index, df_val[metric],
                         marker='o', linestyle='--', alpha=0.6,
                         label=f"{model_name} (Val)"
                     )
-                    model_plotted = True
+                    val_plotted = True
 
             # 2. Test
             test_metrics = model_dict.get('test_metrics', {})
             if plot_test and 'per_hour' in test_metrics:
                 df_test = test_metrics['per_hour']
                 if metric in df_test.columns:
-                    plt.plot(
+                    ax_test.plot(
                         df_test.index, df_test[metric],
                         marker='s', linestyle='-', linewidth=2,
                         label=f"{model_name} (Test)"
                     )
-                    model_plotted = True
+                    test_plotted = True
 
-        if not model_plotted:
+        if not train_plotted and not val_plotted and not test_plotted:
             plt.close()
             return
 
-        plt.title(f"Erreur ({metric}) par Horizon : Validation vs Test")
-        plt.xlabel("Heure cible (0h à 23h)")
-        plt.ylabel(f"Erreur {metric} (MW)")
-        plt.xticks(range(24))
-        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-        plt.grid(True, alpha=0.3)
+        ax_train.set_title(f"Erreur ({metric}) par Horizon : Entrainement")
+        ax_train.set_ylabel(f"Erreur {metric} (MW)")
+        ax_train.set_xticks(range(24))
+        ax_train.grid(True, alpha=0.3)
+        if train_plotted: ax_train.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+
+        ax_val.set_title(f"Erreur ({metric}) par Horizon : Validation")
+        ax_val.set_ylabel(f"Erreur {metric} (MW)")
+        ax_val.set_xticks(range(24))
+        ax_val.grid(True, alpha=0.3)
+        if val_plotted: ax_val.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+
+        ax_test.set_title(f"Erreur ({metric}) par Horizon : Test")
+        ax_test.set_xlabel("Heure cible (0h a 23h)")
+        ax_test.set_ylabel(f"Erreur {metric} (MW)")
+        ax_test.set_xticks(range(24))
+        ax_test.grid(True, alpha=0.3)
+        if test_plotted: ax_test.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+
         plt.tight_layout()
         plt.show()
+
 
     def plot_advanced_metrics(self, model_names=None, use_test=True):
         """
@@ -735,7 +770,7 @@ class TimeSeriesEvaluator:
         """
         df_eval = self.df_test if use_test else self.df_val
         pred_key = "test_preds" if use_test else "val_preds"
-        
+
         if model_names is not None:
             if not isinstance(model_names, list):
                 model_names = [model_names]
@@ -743,57 +778,57 @@ class TimeSeriesEvaluator:
             model_names = [m.__class__.__name__ if not isinstance(m, str) else m for m in model_names]
         else:
             model_names = list(self.models.keys())
-            
+
         valid_models = []
         metrics = []
-        
+
         for name in model_names:
             if name not in self.models or pred_key not in self.models[name]:
                 continue
-                
+
             valid_models.append(name)
             preds = self.models[name][pred_key]
-            
+
             df_res = pd.DataFrame({
-                'date': pd.to_datetime(df_eval['date']).dt.date,
+                'date': pd.to_datetime(df_eval[self.date_col]).dt.date,
                 'heure': df_eval['cible_heure'],
                 'true': df_eval[self.target_col].values,
-                'pred': preds if isinstance(preds, np.ndarray) else preds.values,
+                'pred': np.array(preds),
                 'mois': df_eval['mois'].values,
                 'weekend': df_eval['weekend'].values,
                 'ferie': df_eval['ferie'].values,
                 'temp': df_eval['temperature_c_pondere_pop_derniere_connue'].values if 'temperature_c_pondere_pop_derniere_connue' in df_eval.columns else np.nan
             })
-            
+
             # 1. Quotidien
             daily = df_res.groupby('date')[['true', 'pred']].sum()
             mae_daily = (daily['pred'] - daily['true']).abs().mean()
-            
+
             # 2. Pointe
             idx_true = df_res.groupby('date')['true'].idxmax()
             peak_true = df_res.loc[idx_true, ['date', 'heure', 'true']].set_index('date')
-            
+
             idx_pred = df_res.groupby('date')['pred'].idxmax()
             peak_pred = df_res.loc[idx_pred, ['date', 'heure', 'pred']].set_index('date')
-            
+
             err_peak_val = (peak_pred['pred'] - peak_true['true']).abs().mean()
             err_peak_hour = (peak_pred['heure'] - peak_true['heure']).abs().mean()
-            
+
             # Segmentation
             df_res['saison'] = df_res['mois'].map({12:'Hiver', 1:'Hiver', 2:'Hiver', 3:'Printemps', 4:'Printemps', 5:'Printemps', 6:'Eté', 7:'Eté', 8:'Eté', 9:'Automne', 10:'Automne', 11:'Automne'})
             df_res['type_jour'] = np.where(df_res['ferie'] == 1, 'Férié', np.where(df_res['weekend'] == 1, 'Weekend', 'Ouvré'))
-            
+
             if not df_res['temp'].isna().all():
-                df_res['meteo'] = pd.cut(df_res['temp'], bins=[-np.inf, 5, 25, np.inf], labels=['Froid (<5°C)', 'Normal (5-25°C)', 'Chaud (>25°C)'], observed=False)
+                df_res['meteo'] = pd.cut(df_res['temp'], bins=[-np.inf, 5, 25, np.inf], labels=['Froid (<5°C)', 'Normal (5-25°C)', 'Chaud (>25°C)'])
             else:
                 df_res['meteo'] = 'Inconnu'
-                
+
             df_res['err_abs'] = (df_res['pred'] - df_res['true']).abs()
-            
+
             mae_saison = df_res.groupby('saison')['err_abs'].mean().reindex(['Hiver', 'Printemps', 'Eté', 'Automne'])
             mae_jour = df_res.groupby('type_jour')['err_abs'].mean().reindex(['Ouvré', 'Weekend', 'Férié'])
             mae_meteo = df_res.groupby('meteo', observed=False)['err_abs'].mean()
-            
+
             metrics.append({
                 'name': name,
                 'mae_daily': mae_daily,
@@ -803,17 +838,17 @@ class TimeSeriesEvaluator:
                 'mae_jour': mae_jour,
                 'mae_meteo': mae_meteo
             })
-            
+
         if not metrics:
             print("Aucun modèle n'a de prédictions pour l'ensemble demandé.")
             return
-            
+
         n_models = len(metrics)
         x = np.arange(n_models)
-        
-        fig, axs = plt.subplots(2, 2, figsize=(16, 12))
+
+        fig, axs = plt.subplots(2, 3, figsize=(20, 12))
         fig.suptitle(f"Comparaison des Modèles : Évaluation Avancée ({'Test' if use_test else 'Validation'})", fontsize=18)
-        
+
         # 1. MAE Quotidienne et Pointe
         width = 0.35
         ax1 = axs[0, 0]
@@ -821,10 +856,10 @@ class TimeSeriesEvaluator:
         ax1.bar(x + width/2, [m['err_peak_val'] for m in metrics], width, label='Erreur Pointe Absolue (MW)', color='salmon')
         ax1.set_xticks(x)
         ax1.set_xticklabels([m['name'] for m in metrics], rotation=15)
-        ax1.set_title("Erreur sur la journée et la Pointe")
+        ax1.set_title("Erreur sur la journee et la Pointe")
         ax1.legend()
         ax1.grid(axis='y', alpha=0.3)
-        
+
         # 2. Erreur Heure de Pointe
         ax2 = axs[0, 1]
         ax2.bar(x, [m['err_peak_hour'] for m in metrics], 0.5, color='orange')
@@ -832,9 +867,9 @@ class TimeSeriesEvaluator:
         ax2.set_xticklabels([m['name'] for m in metrics], rotation=15)
         ax2.set_title("Erreur Moyenne sur l'Heure de Pointe (Heures)")
         ax2.grid(axis='y', alpha=0.3)
-        
+
         # 3. Saison
-        ax3 = axs[1, 0]
+        ax3 = axs[0, 2]
         seasons = metrics[0]['mae_saison'].index
         x_seasons = np.arange(len(seasons))
         width_s = 0.8 / n_models
@@ -845,30 +880,30 @@ class TimeSeriesEvaluator:
         ax3.set_title("MAE Horaire par Saison")
         ax3.legend()
         ax3.grid(axis='y', alpha=0.3)
-        
-        # 4. Type de Jour & Météo
-        ax4 = axs[1, 1]
+
+        # 4. Type de Jour
+        ax4 = axs[1, 0]
         jours = metrics[0]['mae_jour'].index
         x_jours = np.arange(len(jours))
         for i, m in enumerate(metrics):
             ax4.bar(x_jours + i * width_s - 0.4 + width_s/2, m['mae_jour'].values, width_s, label=m['name'])
         ax4.set_xticks(x_jours)
         ax4.set_xticklabels(jours)
-        ax4.set_title("MAE par Type de Jour (Barres)")
+        ax4.set_title("MAE par Type de Jour")
         ax4.grid(axis='y', alpha=0.3)
-        
-        ax5 = ax4.twinx()
-        colors = plt.cm.get_cmap('Dark2', n_models)
+
+        # 5. Meteo
+        ax5 = axs[1, 1]
         meteo_cats = metrics[0]['mae_meteo'].index
+        x_meteo = np.arange(len(meteo_cats))
         for i, m in enumerate(metrics):
-            if not m['mae_meteo'].isna().all():
-                ax5.plot(range(len(meteo_cats)), m['mae_meteo'].values, marker='o', linewidth=2, color=colors(i), linestyle='--')
-        ax5.set_xticks(range(len(meteo_cats)))
-        ax5.set_xticklabels(meteo_cats) # It overlaps visually, but this represents the line plot axis
-        
-        # We put the meteo labels on a second x-axis to separate them visually
-        ax5.set_xticks(range(len(jours)))
-        ax5.set_xticklabels([])
-        
+            ax5.bar(x_meteo + i * width_s - 0.4 + width_s/2, m['mae_meteo'].values, width_s, label=m['name'])
+        ax5.set_xticks(x_meteo)
+        ax5.set_xticklabels(meteo_cats)
+        ax5.set_title("MAE par Meteo")
+        ax5.grid(axis='y', alpha=0.3)
+
+        axs[1, 2].axis('off')
+
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         plt.show()

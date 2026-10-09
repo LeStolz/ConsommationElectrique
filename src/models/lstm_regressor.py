@@ -50,17 +50,25 @@ LONGUEUR_FENETRE = 168
 ANNEE_MAX_TRAIN = 2023
 
 COLONNES_SEQ_BRUTES = [
-    "consommation_mw",
-    "temperature_c_pondere_pop", "humidite_pct_pondere_pop",
-    "vent_vitesse_ms_pondere_pop", "nebulosite_pondere_pop",
-    "precip_1h_mm_pondere_pop",
+    "cible_consommation_mw",
+    "temperature_c_pondere_pop_derniere_connue",
+    # "humidite_pct_pondere_pop",
+    # "vent_vitesse_ms_pondere_pop",
+    # "nebulosite_pondere_pop",
+    # "precip_1h_mm_pondere_pop",
 ]
-NOMS_SEQ = COLONNES_SEQ_BRUTES + ["heure_sin", "heure_cos", "weekend", "ferie"]
+NOMS_SEQ = COLONNES_SEQ_BRUTES + ["cible_heure_sin", "cible_heure_cos", "weekend", "ferie"]
 
 NOMS_METEO_DERIVEE = [
-    "temp_moy_24h", "temp_min_24h", "temp_max_24h", "temp_moy_48h",
-    "temp_moy_72h", "temp_tendance_6h", "temp_tendance_24h",
-    "temp_ecart_normale", "degres_sous_15_cumul_3j",
+    "temperature_c_pondere_pop_moyenne_24h_derniere_connue",
+    "temperature_c_pondere_pop_min_24h_derniere_connue",
+    "temperature_c_pondere_pop_max_24h_derniere_connue",
+    "temperature_c_pondere_pop_moyenne_48h_derniere_connue",
+    "temperature_c_pondere_pop_moyenne_72h_derniere_connue",
+    "temperature_c_pondere_pop_tendance_6h_derniere_connue",
+    "temperature_c_pondere_pop_tendance_24h_derniere_connue",
+    "temperature_c_pondere_pop_ecart_normale_derniere_connue",
+    "temperature_c_pondere_pop_sous_15_cumul_3j_derniere_connue",
 ]
 N_CAL, N_MET, N_J7, N_J1 = 10, len(NOMS_METEO_DERIVEE), 24, 24
 SL_CAL = slice(0, N_CAL)
@@ -75,33 +83,16 @@ def _flag(s):
 
 
 def preparer_grille(df):
-    g = df.sort_values("timestamp_utc").reset_index(drop=True).copy()
-    if not (g["timestamp_utc"].diff().dropna() == pd.Timedelta(hours=1)).all():
-        print("ATTENTION : la grille horaire a des trous.")
-    h = g["timestamp_paris"].dt.hour
-    g["heure_sin"] = np.sin(2 * np.pi * h / 24)
-    g["heure_cos"] = np.cos(2 * np.pi * h / 24)
+    g = df.copy()
     g["weekend"] = _flag(g["weekend"])
     g["ferie"] = _flag(g["ferie"])
     for c in COLONNES_SEQ_BRUTES[1:]:
         g[c] = g[c].ffill().bfill()
-
-    # météo dérivée (passé uniquement : fenêtres qui finissent à la ligne)
-    t = g["temperature_c_pondere_pop"]
-    g["temp_moy_24h"] = t.rolling(24, min_periods=12).mean()
-    g["temp_min_24h"] = t.rolling(24, min_periods=12).min()
-    g["temp_max_24h"] = t.rolling(24, min_periods=12).max()
-    g["temp_moy_48h"] = t.rolling(48, min_periods=24).mean()
-    g["temp_moy_72h"] = t.rolling(72, min_periods=36).mean()
-    g["temp_tendance_6h"] = t - t.shift(6)
-    g["temp_tendance_24h"] = t - t.shift(24)
-    g["temp_ecart_normale"] = g["temp_moy_24h"] - _normale_saisonniere(g)
-    g["degres_sous_15_cumul_3j"] = (15 - t).clip(lower=0).rolling(72, min_periods=36).mean()
     return g
 
 
 def calculer_scalers(g):
-    train = g[g["timestamp_paris"].dt.year <= ANNEE_MAX_TRAIN]
+    train = g[g["annee"] <= ANNEE_MAX_TRAIN]
     cols = COLONNES_SEQ_BRUTES
     return {
         "moy": train[cols].mean().to_dict(),
@@ -116,7 +107,7 @@ def _matrice_sequence(g, sc):
     for i, c in enumerate(COLONNES_SEQ_BRUTES):
         M[:, i] = ((g[c] - sc["moy"][c]) / sc["std"][c]).fillna(0).values
     k = len(COLONNES_SEQ_BRUTES)
-    for j, c in enumerate(["heure_sin", "heure_cos", "weekend", "ferie"]):
+    for j, c in enumerate(["cible_heure_sin", "cible_heure_cos", "weekend", "ferie"]):
         M[:, k + j] = g[c].values
     return M
 
@@ -141,10 +132,10 @@ def construire_jeu(df, scalers=None, jours=None, avec_cible=True):
     g = preparer_grille(df)
     sc = scalers or calculer_scalers(g)
     M = _matrice_sequence(g, sc)
-    cm, cs = sc["moy"]["consommation_mw"], sc["std"]["consommation_mw"]
+    cm, cs = sc["moy"]["cible_consommation_mw"], sc["std"]["cible_consommation_mw"]
 
-    date = g["timestamp_paris"].dt.normalize()
-    heure = g["timestamp_paris"].dt.hour
+    date = g["cible_timestamp_paris"].dt.normalize()
+    heure = g["cible_timestamp_paris"].dt.hour
 
     jc = g.assign(_d=date).drop_duplicates("_d").set_index("_d")
     cal = {d: r for d, r in pd.DataFrame({
@@ -153,7 +144,7 @@ def construire_jeu(df, scalers=None, jours=None, avec_cible=True):
     }).iterrows()}
 
     piv = (g.assign(_d=date, _h=heure).drop_duplicates(["_d", "_h"])
-             .pivot(index="_d", columns="_h", values="consommation_mw")
+             .pivot(index="_d", columns="_h", values="cible_consommation_mw")
              .reindex(columns=range(24)))
     piv_n = (piv - cm) / cs
 
@@ -185,9 +176,17 @@ def construire_jeu(df, scalers=None, jours=None, avec_cible=True):
         else:
             y = np.full(24, np.nan)
 
-        j7 = ligne(J1 - 7 * un)                       # J-6, entièrement connu
+        j7 = ligne(J1 - 7 * un)
         veille = np.where(np.arange(24) <= HEURE_COUPURE, ligne(J), ligne(J - un))
-        stat = np.concatenate([_calendrier(J1, cal), met[p], j7, veille])
+
+        # Les features tabulaires de NOMS_METEO_DERIVEE correspondent a la meteo du jour cible
+        # Il faut donc les recuperer sur J1, et non pas sur p (qui est J 14:00) !
+        p_j1_idx = np.where((date == J1).values)[0]
+        if len(p_j1_idx) == 0:
+            continue
+        p_j1 = p_j1_idx[0]
+
+        stat = np.concatenate([_calendrier(J1, cal), met[p_j1], j7, veille])
 
         Xs.append(M[p - LONGUEUR_FENETRE + 1: p + 1])
         Xt.append(stat); Y.append(y); D.append(J)
@@ -203,7 +202,7 @@ def decouper(X_seq, X_stat, y, dates):
 
 
 def desnormaliser(y_norm, sc):
-    return y_norm * sc["std"]["consommation_mw"] + sc["moy"]["consommation_mw"]
+    return y_norm * sc["std"]["cible_consommation_mw"] + sc["moy"]["cible_consommation_mw"]
 
 
 
@@ -322,36 +321,32 @@ class LSTMRegressor(Regressor):
         self.df_raw = None
 
     def fit(self, df_train: pd.DataFrame):
-        # We need the raw data to build sequences
-        if self.df_raw is None:
-            self.df_raw = pd.read_csv(self.raw_data_path)
-            # The timestamp strings in csv should be converted to datetimes
-            # Note: prepare_grille uses timestamp_paris and timestamp_utc
-            self.df_raw['timestamp_paris'] = pd.to_datetime(self.df_raw['timestamp_paris'], utc=True).dt.tz_convert('Europe/Paris')
-            self.df_raw['timestamp_utc'] = pd.to_datetime(self.df_raw['timestamp_utc'], utc=True)
+        # On sauvegarde le dataframe d'entraînement comme historique brut !
+        self.df_raw = df_train.copy()
 
-        # Find the unique prevision dates from the evaluator's df_train
-        jours_train = pd.to_datetime(df_train['prevision_date']).dt.normalize().unique()
+        jours_train = pd.to_datetime(df_train['prevision_date'], utc=True).dt.tz_convert('Europe/Paris').dt.normalize().unique()
 
-        # We need a validation split for early stopping.
         split_idx = int(len(jours_train) * 0.9)
         jours_t = jours_train[:split_idx]
         jours_v = jours_train[split_idx:]
 
-        # Build datasets
         jeu_train = construire_jeu(self.df_raw, jours=jours_t, avec_cible=True)
-        self.scalers = jeu_train[4] # Save scalers
+        self.scalers = jeu_train[4]
 
         jeu_val = construire_jeu(self.df_raw, scalers=self.scalers, jours=jours_v, avec_cible=True)
 
         self.models = entrainer_ensemble(jeu_train, jeu_val, n_modeles=self.n_modeles, max_epochs=self.max_epochs, **self.kwargs)
 
     def predict(self, df_test: pd.DataFrame):
-        jours_test = pd.to_datetime(df_test['prevision_date']).dt.normalize().unique()
+        jours_test = pd.to_datetime(df_test['prevision_date'], utc=True).dt.tz_convert('Europe/Paris').dt.normalize().unique()
 
-        jeu_test = construire_jeu(self.df_raw, scalers=self.scalers, jours=jours_test, avec_cible=False)
+        # Concaténer history + gap (Day J) + test (Day J+1) pour que les features séquentielles se calculent bien
+        gap = getattr(self, 'gap_data', pd.DataFrame())
+        df_combined = pd.concat([self.df_raw, gap, df_test])
 
-        preds_24h = predire(self.models, jeu_test, self.scalers) # Shape: (N_jours, 24)
+        jeu_test = construire_jeu(df_combined, scalers=self.scalers, jours=jours_test, avec_cible=False)
+
+        preds_24h = predire(self.models, jeu_test, self.scalers)
 
         pred_dict = {}
         dates_J = jeu_test[3]
@@ -359,7 +354,7 @@ class LSTMRegressor(Regressor):
             pred_dict[date_j] = preds_24h[i]
 
         def get_pred(row):
-            date_j = pd.to_datetime(row['prevision_date']).normalize()
+            date_j = pd.to_datetime(row['prevision_date'], utc=True).tz_convert('Europe/Paris').normalize()
             heure = int(row['cible_heure'])
             if date_j in pred_dict:
                 return pred_dict[date_j][heure]

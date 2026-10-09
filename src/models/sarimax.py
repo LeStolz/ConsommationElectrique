@@ -32,7 +32,7 @@ class SARIMAXRegressor:
 
         exog = None
         if self.features_cols:
-            exog = self.history[self.features_cols].astype(float)
+            exog = self.history[self.features_cols].astype(float).values
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -45,19 +45,53 @@ class SARIMAXRegressor:
                 enforce_invertibility=False
             )
             self.model_res = model.fit(disp=False)
-
+            
+        # Stocker les prédictions in-sample pour l'évaluation sur le train_set
+        self.fitted_series = pd.Series(self.model_res.fittedvalues, index=self.history.index)
 
     def predict(self, df_test):
         df_pred = df_test.sort_values(self.date_col)
+        
+        # Intercepter l'évaluation in-sample (train_eval)
+        is_in_sample = df_pred[self.date_col].max() <= self.last_train_date
+        if is_in_sample:
+            mapped = df_pred.index.map(self.fitted_series)
+            return pd.Series(mapped, index=df_pred.index).fillna(0)
+            
+        gap = getattr(self, 'gap_data', pd.DataFrame())
+        
+        res = self.model_res
 
-        exog = None
-        if self.features_cols:
-            exog = df_pred[self.features_cols].astype(float)
-
-        steps = len(df_pred)
-
+        import warnings
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            forecast = self.model_res.forecast(steps=steps, exog=exog)
-
-        return pd.Series(forecast, index=df_pred.index)
+            
+            if not gap.empty:
+                gap = gap.sort_values(self.date_col)
+                
+                # Les 14 premieres heures sont connues, on met a jour le filtre de Kalman !
+                known_mask = gap[self.date_col].dt.hour < 14
+                gap_known = gap[known_mask]
+                gap_unknown = gap[~known_mask]
+                
+                if not gap_known.empty:
+                    y_known = gap_known[self.target_col].values
+                    exog_known = gap_known[self.features_cols].astype(float).values if self.features_cols else None
+                    # append() met a jour la memoire SANS re-entrainer (refit=False)
+                    res = res.append(endog=y_known, exog=exog_known, refit=False)
+                
+                # On forecast les heures inconnues du gap + le test set
+                df_combined_future = pd.concat([gap_unknown, df_pred])
+                exog_future = df_combined_future[self.features_cols].astype(float).values if self.features_cols else None
+                
+                forecast = res.forecast(steps=len(df_combined_future), exog=exog_future)
+                
+                # On jette les heures du gap pour ne renvoyer que df_test
+                if len(gap_unknown) > 0:
+                    forecast = forecast[len(gap_unknown):]
+                    
+                return pd.Series(forecast, index=df_pred.index)
+            else:
+                exog = df_pred[self.features_cols].astype(float).values if self.features_cols else None
+                forecast = res.forecast(steps=len(df_pred), exog=exog)
+                return pd.Series(forecast, index=df_pred.index)

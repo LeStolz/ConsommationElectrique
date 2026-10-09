@@ -106,61 +106,77 @@ class SimilarDayRegressor(Regressor):
 
         col_temp = "temperature_c_pondere_pop_derniere_connue"
 
-        combined_history = pd.concat([self.history, df_test])
-        hist_dates_date = combined_history['cible_timestamp_paris'].dt.date
+        gap = getattr(self, 'gap_data', pd.DataFrame())
+        combined_history = pd.concat([self.history, gap, df_test])
+
+        # Pré-calculer tous les profils journaliers au lieu de faire des masques booléens
+        hist_before_14 = combined_history[combined_history['cible_timestamp_paris'].dt.hour < self.pred_hour_local]
+
+        # Profil des heures < 14h
+        profiles_14 = hist_before_14.pivot_table(
+            index=hist_before_14['cible_timestamp_paris'].dt.date,
+            columns=hist_before_14['cible_timestamp_paris'].dt.hour,
+            values='cible_consommation_mw',
+            aggfunc='mean'
+        )
+
+        # Températures moyennes des heures < 14h
+        temps_14 = hist_before_14.groupby(hist_before_14['cible_timestamp_paris'].dt.date)[col_temp].mean()
+
+        # Profil complet 24h
+        profiles_full = combined_history.pivot_table(
+            index=combined_history['cible_timestamp_paris'].dt.date,
+            columns=combined_history['cible_timestamp_paris'].dt.hour,
+            values='cible_consommation_mw',
+            aggfunc='mean'
+        )
+
+        hist_unique_dates = set(profiles_14.index)
 
         for date_j_plus_1 in df_test['cible_timestamp_paris'].dt.date.unique():
             mask_target_day = df_test['cible_timestamp_paris'].dt.date == date_j_plus_1
             df_day = df_test[mask_target_day]
 
             date_j = (pd.to_datetime(date_j_plus_1) - pd.DateOffset(days=1)).date()
-            day_j = combined_history[hist_dates_date == date_j]
 
-            compare_hours = day_j[day_j['cible_timestamp_paris'].dt.hour < self.pred_hour_local]
+            if date_j not in profiles_14.index:
+                final_prediction.loc[df_day.index] = df_day['consommation_mw_meme_heure_derniere_connue']
+                continue
 
-            s_j = compare_hours.set_index(compare_hours['cible_timestamp_paris'].dt.hour)['cible_consommation_mw']
-            s_j = s_j.groupby(s_j.index).mean().reindex(range(self.pred_hour_local))\
-                .interpolate(method='linear', limit_direction='both')
+            s_j = profiles_14.loc[date_j].reindex(range(self.pred_hour_local)).interpolate(method='linear', limit_direction='both')
 
-            if s_j.isna().all() or len(compare_hours) == 0:
+            if s_j.isna().all():
                 final_prediction.loc[df_day.index] = df_day['consommation_mw_meme_heure_derniere_connue']
                 continue
 
             conso_j = s_j.values
-            mean_temp_j = np.nanmean(compare_hours[col_temp].values)
+            mean_temp_j = temps_14.get(date_j, np.nan)
 
             date_j_ts = pd.to_datetime(date_j)
             recent_weeks = [(date_j_ts - pd.DateOffset(days=7 * i)).date() for i in range(1, 5)]
             last_year_weeks = [(date_j_ts - pd.DateOffset(days=364 + 7 * i)).date() for i in range(0, 4)]
 
-            hist_unique_dates = set(hist_dates_date)
             candidate_dates = set(recent_weeks + last_year_weeks).intersection(hist_unique_dates)
             candidates = []
 
             for d in candidate_dates:
-                date_d_compare = combined_history[
-                    (hist_dates_date == d) &
-                    (combined_history['cible_timestamp_paris'].dt.hour < self.pred_hour_local)
-                ]
+                s_d = profiles_14.loc[d].reindex(range(self.pred_hour_local)).interpolate(method='linear', limit_direction='both')
 
-                date_d_plus_1_date = (pd.to_datetime(d) + pd.DateOffset(days=1)).date()
-                date_d_plus_1 = combined_history[hist_dates_date == date_d_plus_1_date]
+                if s_d.isna().all():
+                    continue
 
-                s_d = date_d_compare.set_index(date_d_compare['cible_timestamp_paris'].dt.hour)['cible_consommation_mw']
-                s_d = s_d.groupby(s_d.index).mean().reindex(range(self.pred_hour_local))\
-                    .interpolate(method='linear', limit_direction='both')
-
-                if s_d.isna().all() or len(date_d_compare) == 0:
+                date_d_plus_1 = (pd.to_datetime(d) + pd.DateOffset(days=1)).date()
+                if date_d_plus_1 not in profiles_full.index:
                     continue
 
                 conso_d = s_d.values
-                mean_temp_d = np.nanmean(date_d_compare[col_temp].values)
+                mean_temp_d = temps_14.get(d, np.nan)
 
                 dist_shape = np.linalg.norm(conso_j - conso_d)
                 dist_temp = abs(mean_temp_j - mean_temp_d)
                 total_dist = dist_shape + (self.temp_weight * dist_temp)
 
-                pred_series = date_d_plus_1.groupby(date_d_plus_1['cible_timestamp_paris'].dt.hour)['cible_consommation_mw'].mean()
+                pred_series = profiles_full.loc[date_d_plus_1]
                 candidates.append({
                     'distance': total_dist,
                     'prediction': pred_series
@@ -180,7 +196,8 @@ class SimilarDayRegressor(Regressor):
             for target_index, hour in zip(df_day.index, df_day['cible_timestamp_paris'].dt.hour):
                 val = 0
                 for c_index, c in enumerate(top_k):
-                    pred_val = c['prediction'].get(hour, c['prediction'].mean())
+                    pred_val = c['prediction'].get(hour, np.nan)
+                    if pd.isna(pred_val): pred_val = c['prediction'].mean()
                     val += pred_val * weights[c_index]
                 final_prediction.loc[target_index] = val
 

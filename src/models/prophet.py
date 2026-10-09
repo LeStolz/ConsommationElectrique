@@ -79,8 +79,8 @@ class ProphetRegressor(Regressor):
         self.model = Prophet(**self.prophet_kwargs)
         self.model.add_country_holidays(country_name='FR')
 
-        self.model.add_seasonality(name='daily_wd', period=1, fourier_order=10, condition_name='weekday')
-        self.model.add_seasonality(name='daily_we', period=1, fourier_order=10, condition_name='weekend')
+        self.model.add_seasonality(name='daily_wd', period=1, fourier_order=15, condition_name='weekday')
+        self.model.add_seasonality(name='daily_we', period=1, fourier_order=15, condition_name='weekend')
 
         for feature in self.encoded_cols:
             self.model.add_regressor(feature)
