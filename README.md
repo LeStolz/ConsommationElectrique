@@ -349,33 +349,17 @@ Le choix de la métrique d'erreur dépend de l'application visée. Nous supposon
 
 ## Évaluation
 
-`notebooks/02_evaluation_parfaite`
-
-
-
-avec critère MAE, RMSE, erreur sur la consommation totale quotidienne, erreur sur la valeur de la pointe et erreur sur l’heure de la pointe ?
-Les performances seront également examinées selon les saisons, les jours ouvrés et non ouvrés, les jours fériés ou certaines conditions météorologiques.
-
-
-
-
-ACF residues, Ljung–Box.
-test variable groups combinations with Fourier and .
-
-Analyse des échecs : Au moins trois journées présentant des erreurs importantes seront analysées. Pour chacune, il faut distinguer une limite des données, une limite du modèle, une rupture de régime, un événement difficilement prévisible ou une faiblesse du protocole.
-
-5 Les résidus permettent-ils de valider provisoirement ce choix ?
-
-interface
-
-
-
-
-
-
-
-
-Normalement, on peut utiliser AIC et les residus pour choisir les candidats SARIMAX mais comme le MAE est trop différente (au moins 4000) de décalage, on ne le faire pas parce que trop de temps.
+Points à mentionner dans le rapport:
+- `notebooks/02_evaluation`
+- `notebooks/02_evaluation_parfaite`
+- `notebooks/03_ablation`
+- `notebooks/04_echec`
+- Les autres notebooks si tu veux les consulter : Je pense que ton analyse d'échec pour inventer des features peut être mis dans la section feature engineering aussi, c'est intéressant. Ton ablation aussi.
+- avec critère MAE, RMSE, erreur sur la consommation totale quotidienne, erreur sur la valeur de la pointe et erreur sur l’heure de la pointe ?
+- Les performances seront également examinées selon les saisons, les jours ouvrés et non ouvrés, les jours fériés ou certaines conditions météorologiques.
+- On peut conclure (avec des justification) que XGBoost est le meilleur => Analyse d'échec sur cela.
+- Analyse des échecs : Au moins trois journées présentant des erreurs importantes seront analysées. Pour chacune, il faut distinguer une limite des données, une limite du modèle, une rupture de régime, un événement difficilement prévisible ou une faiblesse du protocole (tu peux réutiliser ton notebook).
+- Normalement, on peut utiliser AIC et les residus pour choisir les candidats SARIMAX mais comme le MAE est trop différente (au moins 4000) de décalage, on ne le faire pas parce que trop de temps.
 
 ## 4. Rapport & Restitution
 
@@ -397,7 +381,7 @@ Un fichier README précisera les dépendances, l’organisation des fichiers, l�
 étapes éventuellement coûteuses.
 
 
-### 8. Audit critique de la chaîne de prévision
+### Audit critique de la chaîne de prévision
 
 2 pages.
 

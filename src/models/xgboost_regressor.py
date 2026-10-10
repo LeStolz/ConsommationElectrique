@@ -1,4 +1,4 @@
-﻿"""
+"""
 Construction du tableau de features pour le modèle XGBoost -- scénarios
 "météo parfaite" et "météo réaliste".
 
@@ -109,11 +109,25 @@ class XGBoostRegressorCustom(Regressor):
 
         if self.colonnes_features is None:
             # On prend toutes les colonnes par défaut
-            self.colonnes_features = [c for c in train_split.columns if c not in COLONNES_NON_FEATURES]
+            self.active_features_ = [c for c in train_split.columns if c not in COLONNES_NON_FEATURES]
+        else:
+            self.active_features_ = []
+            for col in self.colonnes_features:
+                if col in COLONNES_CATEGORIELLES:
+                    # Ajoute toutes les colonnes générées pour cette catégorie
+                    self.active_features_.extend([c for c in train_split.columns if c.startswith(col + "_")])
+                else:
+                    self.active_features_.append(col)
+            # Remove duplicates preserving order (saison_ matches saison_meteorologique_ too)
+            self.active_features_ = list(dict.fromkeys(self.active_features_))
 
         # 3. Séparation X/y et typage booléen (anciennement separer_x_y)
         def separer(df):
-            X = df[self.colonnes_features].copy()
+            # Sécurité : créer les colonnes absentes (ex: une saison manquante dans le val_split)
+            for col in self.active_features_:
+                if col not in df.columns:
+                    df[col] = False
+            X = df[self.active_features_].copy()
             for col in X.columns:
                 if X[col].dtype == bool:
                     X[col] = X[col].astype(int)
@@ -150,20 +164,21 @@ class XGBoostRegressorCustom(Regressor):
             f"{self.modele.best_iteration + 1} / {parametres['n_estimators']}")
         print(f"Meilleure MAE validation : {self.modele.best_score:.2f}")
 
-
     def predict(self, df_test):
         test_split = df_test.copy()
 
         # Encodage pour les données de test
-        if "saison" in test_split.columns:
-            test_split = pd.get_dummies(test_split, columns=COLONNES_CATEGORIELLES)
+        cat_present = [c for c in COLONNES_CATEGORIELLES if c in test_split.columns]
+        if cat_present:
+            test_split = pd.get_dummies(test_split, columns=cat_present)
 
-        for col in self.colonnes_features:
-            if col.startswith("saison_") and col not in test_split.columns:
+        for col in getattr(self, 'active_features_', []):
+            if col not in test_split.columns:
                 test_split[col] = False
 
         # Extraction des features et typage
-        X_test = test_split[self.colonnes_features].copy()
+        features = getattr(self, 'active_features_', self.colonnes_features)
+        X_test = test_split[features].copy()
         for col in X_test.columns:
             if X_test[col].dtype == bool:
                 X_test[col] = X_test[col].astype(int)

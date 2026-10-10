@@ -64,6 +64,12 @@ class SARIMAXRegressor:
 
         # Stocker les prédictions in-sample pour l'évaluation sur le train_set
         self.fitted_series = pd.Series(self.model_res.fittedvalues, index=self.history.index)
+        
+        # Le filtre de Kalman produit des valeurs absurdes pendant l'initialisation (burn).
+        # On remplace ces prédictions initiales par NaN pour ne pas fausser les graphiques d'évaluation (Train MAE).
+        burn = getattr(self.model_res, 'loglikelihood_burn', 0)
+        if burn > 0:
+            self.fitted_series.iloc[:burn] = np.nan
 
     def predict(self, df_test):
         df_pred = df_test.sort_values(self.date_col)

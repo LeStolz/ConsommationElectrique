@@ -533,8 +533,6 @@ class TimeSeriesEvaluator:
         print(f"Best Params : {best_result['params']}\n")
 
         best_result["model"] = best_fitted_model
-        del best_result['params']
-        del best_result['score']
 
         self.models[model_name] = best_result
 
