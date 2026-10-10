@@ -151,7 +151,7 @@ def construire_jeu(df, scalers=None, jours=None, avec_cible=True):
     pos_par_jour = {date.iloc[p]: p for p in pos14}
     if jours is None:
         jours = list(pos_par_jour)
-    un = pd.Timedelta(days=1)
+    un = pd.DateOffset(days=1)
 
     def ligne(jour, h_ok=None):
         if jour not in piv_n.index:
@@ -317,7 +317,6 @@ class LSTMRegressor(Regressor):
         self.df_raw = None
 
     def fit(self, df_train: pd.DataFrame):
-        # On sauvegarde le dataframe d'entraînement comme historique brut !
         self.df_raw = df_train.copy()
 
         jours_train = pd.to_datetime(df_train['prevision_date'], utc=True).dt.tz_convert('Europe/Paris').dt.normalize().unique()

@@ -349,58 +349,60 @@ Le choix de la métrique d'erreur dépend de l'application visée. Nous supposon
 
 ## Évaluation
 
+`notebooks/02_evaluation_parfaite`
 
 
 
-
-
-
-
-
-
-
-LSTM
-plot residues.
-ACF residues, Ljung–Box, AIC, maybe use lag features for SARIMAX.
-Overfit?
-
-test variable group.
 avec critère MAE, RMSE, erreur sur la consommation totale quotidienne, erreur sur la valeur de la pointe et erreur sur l’heure de la pointe ?
 Les performances seront également examinées selon les saisons, les jours ouvrés et non ouvrés, les jours fériés ou certaines conditions météorologiques.
-Analyser de manière critique les résultats obtenus, les erreurs, prise de recul.
 
-Uncertainty?
-On vous donne une série, son ACF/PACF, deux modèles estimés et leurs résidus.
-1 La série semble-t-elle stationnaire ? Pourquoi ?
-2 Quelle transformation proposeriez-vous si nécessaire ?
-3 Quel mécanisme AR/MA/ARMA est plausible ?
-4 Quel modèle retenez-vous après estimation ?
+
+
+
+ACF residues, Ljung–Box.
+test variable groups combinations with Fourier and .
+
+Analyse des échecs : Au moins trois journées présentant des erreurs importantes seront analysées. Pour chacune, il faut distinguer une limite des données, une limite du modèle, une rupture de régime, un événement difficilement prévisible ou une faiblesse du protocole.
+
 5 Les résidus permettent-ils de valider provisoirement ce choix ?
-
-stability in time?
-cost?
 
 interface
 
 
+
+
+
+
+
+
+Normalement, on peut utiliser AIC et les residus pour choisir les candidats SARIMAX mais comme le MAE est trop différente (au moins 4000) de décalage, on ne le faire pas parce que trop de temps.
+
 ## 4. Rapport & Restitution
+
 - [ ] Rédiger le rapport synthétique (< 10 pages).
 - [ ] Effectuer un **Audit critique de la chaîne de prévision** (1 à 2 pages) :
   - Tableau de disponibilité des informations et risques de fuite.
   - Étude d'ablation / valeur ajoutée de la complexité des modèles.
   - Analyse approfondie d'au moins 3 cas d'échecs majeurs.
+  - Analyser de manière critique les résultats obtenus, les erreurs, prise de recul.
 - [ ] Documenter l'usage de l'**Agent conversationnel** (3 exemples d'interaction analysés).
 - [ ] Préparer la présentation orale (< 10 min) et les diapositives.
 
 - Discussion
 - La page de titre, la bibliographie et des annexes techniques raisonnables ne sont pas comptabilisées.
 
+Le code doit couvrir le chargement ou la récupération des données, leur préparation, la construction
+des variables, l’apprentissage, la prévision, l’évaluation et la production des principaux résultats.
+Un fichier README précisera les dépendances, l’organisation des fichiers, l’ordre d’exécution et les
+étapes éventuellement coûteuses.
+
+
 ### 8. Audit critique de la chaîne de prévision
 
 2 pages.
 
 - Disponibilité de l’information : Un tableau indiquera, pour chaque variable : sa source, son instant de disponibilité, son caractère observé ou prévu, son utilisation dans le modèle et le risque éventuel de fuite d’information. Il faut répondre à la question : Cette prévision aurait-elle réellement pu être calculée à 14 h le jour J ?
-- Valeur ajoutée de la complexité, Cela vaut la peine ? : Une étude d’ablation ou de sensibilité évaluera l’apport de certains groupes de variables, par exemple la météo, le calendrier ou les retards de consommation.
+- Valeur ajoutée de la complexité, Cela vaut la peine ? : Le groupe comparera au moins un benchmark, un modèle simple et un modèle plus élaboré. Une étude d’ablation ou de sensibilité évaluera l’apport de certains groupes de variables, par exemple la météo, le calendrier ou les retards de consommation.
 - Analyse des échecs : Au moins trois journées présentant des erreurs importantes seront analysées. Pour chacune, il faut distinguer une limite des données, une limite du modèle, une rupture de régime, un événement difficilement prévisible ou une faiblesse du protocole.
 - Robustesse et conditions d’utilisation : Discuter la stabilité du classement des modèles selon les périodes, les métriques et les
 heures prévues. Il précisera les situations dans lesquelles il déconseillerait l’utilisation du système proposé.

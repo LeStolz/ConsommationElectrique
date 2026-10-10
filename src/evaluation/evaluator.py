@@ -695,7 +695,7 @@ class TimeSeriesEvaluator:
     def plot_error_per_horizon(self, metric='MAE', plot_test=True):
         """
         Trace l'erreur (ex: MAE, RMSE) en fonction de l'horizon (heure cible de la journÃ©e).
-        Affiche les erreurs de Validation (pointillÃ©s) et Test (ligne pleine) si disponibles.
+        Affiche les erreurs de Validation et Test si disponibles.
         """
 
         fig, axes = plt.subplots(3, 1, figsize=(14, 18), sharex=True, sharey=False)
@@ -772,10 +772,10 @@ class TimeSeriesEvaluator:
     def plot_advanced_metrics(self, model_names=None, use_test=True):
         """
         Affiche des graphiques avancés comparatifs pour tous les modèles stockés :
-        1. MAE Quotidienne et MAE sur la Pointe (Valeur)
-        2. MAE sur l'Heure de Pointe
-        3. Segmentation par saison (MAE)
-        4. Segmentation par type de jour et météo (MAE)
+        - Erreur Totale Quotidienne globale
+        - Erreur sur la Pointe (Valeur) globale
+        - Erreur sur l'Heure de Pointe globale
+        - MAE Horaire, Quotidienne, et Pointe par segment (Saison, Type de jour, Météo)
         """
         df_eval = self.df_test if use_test else self.df_val
         pred_key = "test_preds" if use_test else "val_preds"
@@ -783,7 +783,6 @@ class TimeSeriesEvaluator:
         if model_names is not None:
             if not isinstance(model_names, list):
                 model_names = [model_names]
-            # Convert class instances to strings
             model_names = [m.__class__.__name__ if not isinstance(m, str) else m for m in model_names]
         else:
             model_names = list(self.models.keys())
@@ -806,14 +805,26 @@ class TimeSeriesEvaluator:
                 'mois': df_eval['mois'].values,
                 'weekend': df_eval['weekend'].values,
                 'ferie': df_eval['ferie'].values,
-                'temp': df_eval['temperature_c_pondere_pop_derniere_connue'].values if 'temperature_c_pondere_pop_derniere_connue' in df_eval.columns else np.nan
+                'temp': df_eval['temperature_c_pondere_pop_derniere_connue'].values \
+                    if 'temperature_c_pondere_pop_derniere_connue' in df_eval.columns else np.nan,
+                'saison': df_eval['saison_meteorologique'].values
             })
 
-            # 1. Quotidien
+            df_res['type_jour'] = np.where(
+                df_res['ferie'] == 1, 'Férié', np.where(df_res['weekend'] == 1, 'Weekend', 'Ouvré')
+            )
+
+            if not df_res['temp'].isna().all():
+                df_res['meteo'] = pd.cut(df_res['temp'], bins=[-np.inf, 5, 22, np.inf], labels=['Froid (<5°C)', 'Normal (5-22°C)', 'Chaud (>22°C)'])
+            else:
+                df_res['meteo'] = 'Inconnu'
+
+            df_res['err_abs'] = (df_res['pred'] - df_res['true']).abs()
+            mae_global = df_res['err_abs'].mean()
+
             daily = df_res.groupby('date')[['true', 'pred']].sum()
             mae_daily = (daily['pred'] - daily['true']).abs().mean()
 
-            # 2. Pointe
             idx_true = df_res.groupby('date')['true'].idxmax()
             peak_true = df_res.loc[idx_true, ['date', 'heure', 'true']].set_index('date')
 
@@ -823,29 +834,50 @@ class TimeSeriesEvaluator:
             err_peak_val = (peak_pred['pred'] - peak_true['true']).abs().mean()
             err_peak_hour = (peak_pred['heure'] - peak_true['heure']).abs().mean()
 
-            # Segmentation
-            df_res['saison'] = df_res['mois'].map({12:'Hiver', 1:'Hiver', 2:'Hiver', 3:'Printemps', 4:'Printemps', 5:'Printemps', 6:'Eté', 7:'Eté', 8:'Eté', 9:'Automne', 10:'Automne', 11:'Automne'})
-            df_res['type_jour'] = np.where(df_res['ferie'] == 1, 'Férié', np.where(df_res['weekend'] == 1, 'Weekend', 'Ouvré'))
-
-            if not df_res['temp'].isna().all():
-                df_res['meteo'] = pd.cut(df_res['temp'], bins=[-np.inf, 5, 25, np.inf], labels=['Froid (<5°C)', 'Normal (5-25°C)', 'Chaud (>25°C)'])
-            else:
-                df_res['meteo'] = 'Inconnu'
-
-            df_res['err_abs'] = (df_res['pred'] - df_res['true']).abs()
-
-            mae_saison = df_res.groupby('saison')['err_abs'].mean().reindex(['Hiver', 'Printemps', 'Eté', 'Automne'])
+            mae_saison = df_res.groupby('saison')['err_abs'].mean().reindex(['Hiver', 'Printemps', 'Été', 'Automne'])
             mae_jour = df_res.groupby('type_jour')['err_abs'].mean().reindex(['Ouvré', 'Weekend', 'Férié'])
             mae_meteo = df_res.groupby('meteo', observed=False)['err_abs'].mean()
 
+            df_day = df_res.groupby('date').agg({'saison': 'first', 'type_jour': 'first', 'temp': 'mean'})
+            if not df_day['temp'].isna().all():
+                df_day['meteo'] = pd.cut(df_day['temp'], bins=[-np.inf, 5, 22, np.inf], labels=['Froid (<5°C)', 'Normal (5-22°C)', 'Chaud (>22°C)'])
+            else:
+                df_day['meteo'] = 'Inconnu'
+
+            df_day['err_daily'] = (daily['pred'] - daily['true']).abs()
+            df_day['err_peak'] = (peak_pred['pred'] - peak_true['true']).abs()
+            df_day['err_peak_hour'] = (peak_pred['heure'] - peak_true['heure']).abs()
+
+            mae_daily_saison = df_day.groupby('saison')['err_daily'].mean().reindex(['Hiver', 'Printemps', 'Été', 'Automne'])
+            mae_peak_saison = df_day.groupby('saison')['err_peak'].mean().reindex(['Hiver', 'Printemps', 'Été', 'Automne'])
+            mae_peak_hour_saison = df_day.groupby('saison')['err_peak_hour'].mean().reindex(['Hiver', 'Printemps', 'Été', 'Automne'])
+
+            mae_daily_jour = df_day.groupby('type_jour')['err_daily'].mean().reindex(['Ouvré', 'Weekend', 'Férié'])
+            mae_peak_jour = df_day.groupby('type_jour')['err_peak'].mean().reindex(['Ouvré', 'Weekend', 'Férié'])
+            mae_peak_hour_jour = df_day.groupby('type_jour')['err_peak_hour'].mean().reindex(['Ouvré', 'Weekend', 'Férié'])
+
+            mae_daily_meteo = df_day.groupby('meteo', observed=False)['err_daily'].mean()
+            mae_peak_meteo = df_day.groupby('meteo', observed=False)['err_peak'].mean()
+            mae_peak_hour_meteo = df_day.groupby('meteo', observed=False)['err_peak_hour'].mean()
+
             metrics.append({
                 'name': name,
+                'mae_global': mae_global,
                 'mae_daily': mae_daily,
                 'err_peak_val': err_peak_val,
                 'err_peak_hour': err_peak_hour,
                 'mae_saison': mae_saison,
                 'mae_jour': mae_jour,
-                'mae_meteo': mae_meteo
+                'mae_meteo': mae_meteo,
+                'mae_daily_saison': mae_daily_saison,
+                'mae_peak_saison': mae_peak_saison,
+                'mae_daily_jour': mae_daily_jour,
+                'mae_peak_jour': mae_peak_jour,
+                'mae_daily_meteo': mae_daily_meteo,
+                'mae_peak_meteo': mae_peak_meteo,
+                'mae_peak_hour_saison': mae_peak_hour_saison,
+                'mae_peak_hour_jour': mae_peak_hour_jour,
+                'mae_peak_hour_meteo': mae_peak_hour_meteo
             })
 
         if not metrics:
@@ -854,65 +886,117 @@ class TimeSeriesEvaluator:
 
         n_models = len(metrics)
         x = np.arange(n_models)
+        width = 0.8 / n_models
 
-        fig, axs = plt.subplots(2, 3, figsize=(20, 12))
-        fig.suptitle(f"Comparaison des Modèles : Évaluation Avancée ({'Test' if use_test else 'Validation'})", fontsize=18)
+        fig, axs = plt.subplots(8, 2, figsize=(20, 40))
+        fig.suptitle(f"Comparaison des Modèles ({'Test' if use_test else 'Validation'})", fontsize=22)
 
-        # 1. MAE Quotidienne et Pointe
-        width = 0.35
-        ax1 = axs[0, 0]
-        ax1.bar(x - width/2, [m['mae_daily'] for m in metrics], width, label='Erreur Totale Quotidienne (MW)', color='skyblue')
-        ax1.bar(x + width/2, [m['err_peak_val'] for m in metrics], width, label='Erreur Pointe Absolue (MW)', color='salmon')
-        ax1.set_xticks(x)
-        ax1.set_xticklabels([m['name'] for m in metrics], rotation=15)
-        ax1.set_title("Erreur sur la journee et la Pointe")
-        ax1.legend()
-        ax1.grid(axis='y', alpha=0.3)
+        # Row 0: Global MAE, Global Totale Quotidienne
+        ax = axs[0, 0]
+        ax.bar(x, [m['mae_global'] for m in metrics], 0.5, color='mediumpurple')
+        ax.set_xticks(x)
+        ax.set_xticklabels([m['name'] for m in metrics], rotation=15)
+        ax.set_title("MAE Globale Horaire")
+        ax.set_ylabel("Erreur Absolue Moyenne (MW)")
+        ax.grid(axis='y', alpha=0.3)
 
-        # 2. Erreur Heure de Pointe
-        ax2 = axs[0, 1]
-        ax2.bar(x, [m['err_peak_hour'] for m in metrics], 0.5, color='orange')
-        ax2.set_xticks(x)
-        ax2.set_xticklabels([m['name'] for m in metrics], rotation=15)
-        ax2.set_title("Erreur Moyenne sur l'Heure de Pointe (Heures)")
-        ax2.grid(axis='y', alpha=0.3)
+        ax = axs[0, 1]
+        ax.bar(x, [m['mae_daily'] for m in metrics], 0.5, color='skyblue')
+        ax.set_xticks(x)
+        ax.set_xticklabels([m['name'] for m in metrics], rotation=15)
+        ax.set_title("Erreur Totale Quotidienne (Global)")
+        ax.set_ylabel("Erreur Absolue Moyenne (MW)")
+        ax.grid(axis='y', alpha=0.3)
 
-        # 3. Saison
-        ax3 = axs[0, 2]
+        # Row 1: Global Pointe Absolue, Global Heure de Pointe
+        ax = axs[1, 0]
+        ax.bar(x, [m['err_peak_val'] for m in metrics], 0.5, color='salmon')
+        ax.set_xticks(x)
+        ax.set_xticklabels([m['name'] for m in metrics], rotation=15)
+        ax.set_title("Erreur de Pointe (Global)")
+        ax.set_ylabel("Erreur Absolue (MW)")
+        ax.grid(axis='y', alpha=0.3)
+
+        ax = axs[1, 1]
+        ax.bar(x, [m['err_peak_hour'] for m in metrics], 0.5, color='orange')
+        ax.set_xticks(x)
+        ax.set_xticklabels([m['name'] for m in metrics], rotation=15)
+        ax.set_title("Erreur Heure de Pointe (Global)")
+        ax.set_ylabel("Erreur Moyenne (Heures)")
+        ax.grid(axis='y', alpha=0.3)
+
+        # Row 2: Saison MAE, Saison Totale Quotidienne
         seasons = metrics[0]['mae_saison'].index
         x_seasons = np.arange(len(seasons))
-        width_s = 0.8 / n_models
         for i, m in enumerate(metrics):
-            ax3.bar(x_seasons + i * width_s - 0.4 + width_s/2, m['mae_saison'].values, width_s, label=m['name'])
-        ax3.set_xticks(x_seasons)
-        ax3.set_xticklabels(seasons)
-        ax3.set_title("MAE Horaire par Saison")
-        ax3.legend()
-        ax3.grid(axis='y', alpha=0.3)
+            axs[2, 0].bar(x_seasons + i * width - 0.4 + width/2, m['mae_saison'].values, width, label=m['name'])
+            axs[2, 1].bar(x_seasons + i * width - 0.4 + width/2, m['mae_daily_saison'].values, width, label=m['name'])
 
-        # 4. Type de Jour
-        ax4 = axs[1, 0]
+        for j, title in enumerate(["MAE Horaire", "Erreur Totale Quotidienne"]):
+            axs[2, j].set_xticks(x_seasons)
+            axs[2, j].set_xticklabels(seasons)
+            axs[2, j].set_title(f"{title} (par Saison)")
+            axs[2, j].grid(axis='y', alpha=0.3)
+            if j == 0: axs[2, j].legend()
+
+        # Row 3: Saison Pointe Absolue, Saison Heure de Pointe
+        for i, m in enumerate(metrics):
+            axs[3, 0].bar(x_seasons + i * width - 0.4 + width/2, m['mae_peak_saison'].values, width, label=m['name'])
+            axs[3, 1].bar(x_seasons + i * width - 0.4 + width/2, m['mae_peak_hour_saison'].values, width, label=m['name'])
+
+        for j, title in enumerate(["Erreur Pointe Absolue", "Erreur Heure de Pointe"]):
+            axs[3, j].set_xticks(x_seasons)
+            axs[3, j].set_xticklabels(seasons)
+            axs[3, j].set_title(f"{title} (par Saison)")
+            axs[3, j].grid(axis='y', alpha=0.3)
+
+        # Row 4: Jour MAE, Jour Totale Quotidienne
         jours = metrics[0]['mae_jour'].index
         x_jours = np.arange(len(jours))
         for i, m in enumerate(metrics):
-            ax4.bar(x_jours + i * width_s - 0.4 + width_s/2, m['mae_jour'].values, width_s, label=m['name'])
-        ax4.set_xticks(x_jours)
-        ax4.set_xticklabels(jours)
-        ax4.set_title("MAE par Type de Jour")
-        ax4.grid(axis='y', alpha=0.3)
+            axs[4, 0].bar(x_jours + i * width - 0.4 + width/2, m['mae_jour'].values, width, label=m['name'])
+            axs[4, 1].bar(x_jours + i * width - 0.4 + width/2, m['mae_daily_jour'].values, width, label=m['name'])
 
-        # 5. Meteo
-        ax5 = axs[1, 1]
+        for j, title in enumerate(["MAE Horaire", "Erreur Totale Quotidienne"]):
+            axs[4, j].set_xticks(x_jours)
+            axs[4, j].set_xticklabels(jours)
+            axs[4, j].set_title(f"{title} (par Type de Jour)")
+            axs[4, j].grid(axis='y', alpha=0.3)
+
+        # Row 5: Jour Pointe Absolue, Jour Heure de Pointe
+        for i, m in enumerate(metrics):
+            axs[5, 0].bar(x_jours + i * width - 0.4 + width/2, m['mae_peak_jour'].values, width, label=m['name'])
+            axs[5, 1].bar(x_jours + i * width - 0.4 + width/2, m['mae_peak_hour_jour'].values, width, label=m['name'])
+
+        for j, title in enumerate(["Erreur Pointe Absolue", "Erreur Heure de Pointe"]):
+            axs[5, j].set_xticks(x_jours)
+            axs[5, j].set_xticklabels(jours)
+            axs[5, j].set_title(f"{title} (par Type de Jour)")
+            axs[5, j].grid(axis='y', alpha=0.3)
+
+        # Row 6: Météo MAE, Météo Totale Quotidienne
         meteo_cats = metrics[0]['mae_meteo'].index
         x_meteo = np.arange(len(meteo_cats))
         for i, m in enumerate(metrics):
-            ax5.bar(x_meteo + i * width_s - 0.4 + width_s/2, m['mae_meteo'].values, width_s, label=m['name'])
-        ax5.set_xticks(x_meteo)
-        ax5.set_xticklabels(meteo_cats)
-        ax5.set_title("MAE par Meteo")
-        ax5.grid(axis='y', alpha=0.3)
+            axs[6, 0].bar(x_meteo + i * width - 0.4 + width/2, m['mae_meteo'].values, width, label=m['name'])
+            axs[6, 1].bar(x_meteo + i * width - 0.4 + width/2, m['mae_daily_meteo'].values, width, label=m['name'])
 
-        axs[1, 2].axis('off')
+        for j, title in enumerate(["MAE Horaire", "Erreur Totale Quotidienne"]):
+            axs[6, j].set_xticks(x_meteo)
+            axs[6, j].set_xticklabels(meteo_cats)
+            axs[6, j].set_title(f"{title} (par Météo)")
+            axs[6, j].grid(axis='y', alpha=0.3)
 
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        # Row 7: Météo Pointe Absolue, Météo Heure de Pointe
+        for i, m in enumerate(metrics):
+            axs[7, 0].bar(x_meteo + i * width - 0.4 + width/2, m['mae_peak_meteo'].values, width, label=m['name'])
+            axs[7, 1].bar(x_meteo + i * width - 0.4 + width/2, m['mae_peak_hour_meteo'].values, width, label=m['name'])
+
+        for j, title in enumerate(["Erreur Pointe Absolue", "Erreur Heure de Pointe"]):
+            axs[7, j].set_xticks(x_meteo)
+            axs[7, j].set_xticklabels(meteo_cats)
+            axs[7, j].set_title(f"{title} (par Météo)")
+            axs[7, j].grid(axis='y', alpha=0.3)
+
+        plt.tight_layout(rect=[0, 0.03, 1, 0.98])
         plt.show()
