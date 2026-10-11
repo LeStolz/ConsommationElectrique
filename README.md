@@ -306,8 +306,6 @@ Le LSTM traite les données sous forme de séquences afin d'apprendre les évolu
 
 Le LSTM sera donc évalué afin de déterminer si sa capacité à apprendre des représentations temporelles complexes améliore les performances de prévision par rapport à des approches plus simples, dans les mêmes conditions de validation.
 
-****À AJOUTER DES DÉTAILS****
-
 #### 4.5 SARIMAX
 
 **Hypothèse :** une part importante de la consommation électrique peut être prédite à partir de ses dépendances temporelles passées, en tenant compte la tendance, des saisonnalités, des effets calendaires et des variables météorologiques.
@@ -349,62 +347,10 @@ Le choix de la métrique d'erreur dépend de l'application visée. Nous supposon
 
 ## Évaluation
 
-Points à mentionner dans le rapport:
 - `notebooks/02_evaluation`
 - `notebooks/02_evaluation_parfaite`
 - `notebooks/03_ablation`
 - `notebooks/04_echec`
-- Les autres notebooks si tu veux les consulter : Je pense que ton analyse d'échec pour inventer des features peut être mis dans la section feature engineering aussi, c'est intéressant. Ton ablation aussi.
-- avec critère MAE, RMSE, erreur sur la consommation totale quotidienne, erreur sur la valeur de la pointe et erreur sur l’heure de la pointe ?
-- Les performances seront également examinées selon les saisons, les jours ouvrés et non ouvrés, les jours fériés ou certaines conditions météorologiques.
-- On peut conclure (avec des justification) que XGBoost est le meilleur => Analyse d'échec sur cela.
-- Analyse des échecs : Au moins trois journées présentant des erreurs importantes seront analysées. Pour chacune, il faut distinguer une limite des données, une limite du modèle, une rupture de régime, un événement difficilement prévisible ou une faiblesse du protocole (tu peux réutiliser ton notebook).
-- Normalement, on peut utiliser AIC et les residus pour choisir les candidats SARIMAX mais comme le MAE est trop différente (au moins 4000) de décalage, on ne le faire pas parce que trop de temps.
-
-## 4. Rapport & Restitution
-
-- [ ] Rédiger le rapport synthétique (< 10 pages).
-- [ ] Effectuer un **Audit critique de la chaîne de prévision** (1 à 2 pages) :
-  - Tableau de disponibilité des informations et risques de fuite.
-  - Étude d'ablation / valeur ajoutée de la complexité des modèles.
-  - Analyse approfondie d'au moins 3 cas d'échecs majeurs.
-  - Analyser de manière critique les résultats obtenus, les erreurs, prise de recul.
-- [ ] Documenter l'usage de l'**Agent conversationnel** (3 exemples d'interaction analysés).
-- [ ] Préparer la présentation orale (< 10 min) et les diapositives.
-
-- Discussion
-- La page de titre, la bibliographie et des annexes techniques raisonnables ne sont pas comptabilisées.
-
-Le code doit couvrir le chargement ou la récupération des données, leur préparation, la construction
-des variables, l’apprentissage, la prévision, l’évaluation et la production des principaux résultats.
-Un fichier README précisera les dépendances, l’organisation des fichiers, l’ordre d’exécution et les
-étapes éventuellement coûteuses.
-
-
-### Audit critique de la chaîne de prévision
-
-2 pages.
-
-- Disponibilité de l’information : Un tableau indiquera, pour chaque variable : sa source, son instant de disponibilité, son caractère observé ou prévu, son utilisation dans le modèle et le risque éventuel de fuite d’information. Il faut répondre à la question : Cette prévision aurait-elle réellement pu être calculée à 14 h le jour J ?
-- Valeur ajoutée de la complexité, Cela vaut la peine ? : Le groupe comparera au moins un benchmark, un modèle simple et un modèle plus élaboré. Une étude d’ablation ou de sensibilité évaluera l’apport de certains groupes de variables, par exemple la météo, le calendrier ou les retards de consommation.
-- Analyse des échecs : Au moins trois journées présentant des erreurs importantes seront analysées. Pour chacune, il faut distinguer une limite des données, une limite du modèle, une rupture de régime, un événement difficilement prévisible ou une faiblesse du protocole.
-- Robustesse et conditions d’utilisation : Discuter la stabilité du classement des modèles selon les périodes, les métriques et les
-heures prévues. Il précisera les situations dans lesquelles il déconseillerait l’utilisation du système proposé.
-
----
-
-### Agent conversationnel
-Le rapport présentera trois exemples documentés :
-1. une proposition d’un agent conservée après vérification ;
-2. une proposition modifiée ou rejetée ;
-3. une erreur, faiblesse ou réponse trompeuse détectée.
-Pour chaque exemple, le groupe indiquera brièvement la tâche demandée, la proposition obtenue, la critique, décision prise et la méthode de vérification. Une annexe peut contenir un journal synthétique des usages transparent.
-
-### À rendre
-
-- Rapport.
-- Le code (reproductible) doit couvrir le chargement ou la récupération des données, leur préparation, la construction des variables, l’apprentissage, la prévision, l’évaluation et la production des principaux résultats. Un fichier README précisera les dépendances, l’organisation des fichiers, l’ordre d’exécution et les étapes éventuellement coûteuses.
-- Présentation (< 10 mins), accompagnée de diapositives, mettra en avant le problème, le protocole, les principaux choix, les résultats, un cas d’échec significatif et la conclusion critique.
 
 ---
 
@@ -425,3 +371,16 @@ Pour chaque exemple, le groupe indiquera brièvement la tâche demandée, la pro
 │   └── evaluation/            # Calcul des métriques et analyse d'erreurs
 └── README.md
 ```
+
+## Dépendances et Exécution
+
+
+
+Un fichier README précisera les dépendances, l’ordre d’exécution et les étapes éventuellement coûteuses.
+Préparer la présentation orale (< 10 min) et les diapositives.
+
+### À rendre
+
+- Rapport.
+- Le code (reproductible) doit couvrir le chargement ou la récupération des données, leur préparation, la construction des variables, l’apprentissage, la prévision, l’évaluation et la production des principaux résultats. Un fichier README précisera les dépendances, l’organisation des fichiers, l’ordre d’exécution et les étapes éventuellement coûteuses.
+- Présentation (< 10 mins), accompagnée de diapositives, mettra en avant le problème, le protocole, les principaux choix, les résultats, un cas d’échec significatif et la conclusion critique.

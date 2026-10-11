@@ -10,3 +10,4 @@ holidays
 xgboost
 prophet
 torch
+statsmodels
